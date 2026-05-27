@@ -52,7 +52,6 @@ async function askAIBackend(prompt,onChunk) {
             }
             return;
         }
-
         const systemPrompt =
             `
             You are VRTX AI,
