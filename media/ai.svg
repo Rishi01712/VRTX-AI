@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+
+    <!-- Outer Circle -->
+    <circle cx="256" cy="256" r="210" stroke="white" stroke-width="18"></circle>
+
+    <!-- Main Star -->
+    <path d="
+        M256 70
+        L304 190
+        L435 200
+        L332 285
+        L365 415
+        L256 345
+        L147 415
+        L180 285
+        L77 200
+        L208 190
+        Z
+        " stroke="white" stroke-width="16" stroke-linejoin="round" fill="none"></path>
+
+    <!-- Inner AI Core -->
+    <circle cx="256" cy="256" r="48" stroke="white" stroke-width="14"></circle>
+
+    <!-- Neural Lines -->
+    <line x1="256" y1="110" x2="256" y2="208" stroke="white" stroke-width="12" stroke-linecap="round"></line>
+
+    <line x1="130" y1="210" x2="210" y2="238" stroke="white" stroke-width="12" stroke-linecap="round"></line>
+
+    <line x1="382" y1="210" x2="302" y2="238" stroke="white" stroke-width="12" stroke-linecap="round"></line>
+
+    <!-- Bottom Tech Lines -->
+    <line x1="200" y1="310" x2="160" y2="380" stroke="white" stroke-width="10" stroke-linecap="round"></line>
+
+    <line x1="312" y1="310" x2="352" y2="380" stroke="white" stroke-width="10" stroke-linecap="round"></line>
+
+</svg>

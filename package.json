@@ -1,0 +1,66 @@
+{
+  "name": "zoho-exe",
+  "displayName": "Zoho_Exe",
+  "description": "AI-powered autonomous coding assistant",
+  "publisher": "Rishi",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.120.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "zoho-ai-sidebar",
+          "title": "ZOHO AI",
+          "icon": "media/ai.svg"
+        }
+      ]
+    },
+    "views": {
+      "zoho-ai-sidebar": [
+        {
+          "type": "webview",
+          "id": "zoho-ai.chatView",
+          "name": "Assistant",
+          "icon": "media/ai.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "zoho-exe.modifyCode",
+        "title": "Zoho AI: Modify Code"
+      },
+      {
+        "command": "zoho-exe.indexWorkspace",
+        "title": "Zoho AI: Index Workspace"
+      }
+    ]
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.120.0",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.39.3"
+  },
+  "dependencies": {
+    "chromadb": "^3.4.3",
+    "highlight.js": "^11.11.1",
+    "langchain": "^1.4.0",
+    "marked": "^18.0.3",
+    "ollama": "^0.6.3",
+    "tree-sitter": "^0.25.0"
+  }
+}

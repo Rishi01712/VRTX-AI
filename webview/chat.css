@@ -1,0 +1,139 @@
+body {
+    background: #1e1e1e;
+    color: white;
+    font-family: Arial, sans-serif;
+    padding: 12px;
+    border: #37383c solid 1px;
+    border-width: 2px 2px 2px 2px;
+    border-radius: 10px;
+}
+
+h2 {
+    text-align: center;
+    font-size: 22px;
+    font-weight: bold;
+    color: #25bee4;
+}
+
+/*h2 {
+    text-align: center;
+    font-size: 22px;
+    font-weight: bold;
+    animation: colorShift 6s infinite;
+}
+
+@keyframes colorShift {
+    0% {color: #25bee4;}
+    49% {color: #25bee4;}
+    50% {color: #60dec7;}
+    100% {color: #60dec7;}
+}*/
+
+#messages {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    height: 75vh;
+    overflow-y: auto;
+    border: 1px solid #333;
+    padding: 12px;
+    margin-bottom: 12px;
+    border-radius: 10px;
+    background: #252526;
+}
+
+.message {
+    padding: 0px 16px;
+    border-radius: 14px;
+    line-height: 1.5;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    max-width: 85%;
+    width: auto;
+}
+
+.user {
+
+    background: #333;
+    align-self: flex-end;
+}
+
+.ai {
+    background: #222;
+    color: #c0cbc9;
+    align-self: flex-start;
+}
+
+.error {
+    background: #550000;
+    color: #ff6666;
+}
+
+#inputContainer {
+    display: flex;
+    gap: 5px;
+}
+
+textarea {
+    flex: 1;
+    min-height: 25px;
+    max-height: 25px;
+    resize: none;
+    padding: 14px 16px;
+    background: #333;
+    color: white;
+    border: none;
+    border-radius: 12px;
+    outline: none;
+    font-size: 14px;
+    font-family: Arial, sans-serif;
+    line-height: 1.5;
+    overflow-y: auto;
+}
+
+button {
+    width: 90px;
+    border: none;
+    color: white;
+    border-radius: 10px;
+    background: #18807d;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.copyBtn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 100;
+    border: none;
+    background: rgba(40, 40, 40, 0.95);
+    color: white;
+    padding: 6px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: 0.2s;
+}
+
+.copyBtn:hover {
+    background: #444;
+}
+
+.codeBlockWrapper {
+    margin-top: 12px;
+}
+
+pre {
+    position: relative;
+    overflow-x: auto;
+    border-radius: 12px;
+    margin: 0;
+    padding: 18px;
+    padding-top: 55px !important;
+    background: #0d1117;
+}
+
+pre code {
+    background: transparent !important;
+}
