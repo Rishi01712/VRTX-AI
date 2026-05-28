@@ -6,7 +6,20 @@ const {findRelevantFiles,readFileTool,getWorkspaceTree} = require("./fileService
 const {loadChatHistory} = require("./memoryService");
 const {buildMultiFileContext} = require("./MultipleFileService");
 const {modifyFileTool} = require("./editService");
-const {extractRelevantSnippet} = require("./snippetService");
+// const {extractRelevantSnippet} = require("./snippetService");
+// const {extractEditIntent} = require("./intentService");
+// const {buildPatch} = require("./patchService");
+
+/**
+ * @param {string} text
+ */
+function sanitizeGeneratedCode(text) {
+    return text
+        .replace(/```[a-zA-Z]*/g, "")
+        .replace(/```/g, "")
+        .replace(/^\d+:\s?/gm, "")
+        .trim();
+}
 
 /**
  * @param {string} prompt
@@ -88,17 +101,13 @@ async function askAIBackend(prompt, onChunk) {
             - Never assume workspace state from memory.
             - Always inspect real files when needed.
 
-            File Modification Rules:
-            - Prefer precise edits.
-            - Never rewrite entire files for small changes.
-            - Use replace for small edits.
-            - Use replace_function only for large rewrites.
-            - Use insert_before or insert_after for insertions.
-
-            IMPORTANT:
-            - target = EXISTING text
-            - newText = NEW replacement text
-            - NEVER swap them.
+            When modifying files:
+            - ALWAYS return complete updated file content.
+            - NEVER return partial patches.
+            - NEVER omit unrelated code.
+            - ALWAYS call modify_file.
+            - NEVER explain edits without tool calls.
+            - NEVER return manual instructions instead of tool usage.
             `;
 
         const history = isFollowUp(prompt)? loadChatHistory().slice(-6): [];
@@ -165,30 +174,24 @@ async function askAIBackend(prompt, onChunk) {
             const fileResult =readFileTool({path: matchedFiles[0]});
 
             if (fileResult?.success) {
-                const snippet =extractRelevantSnippet(fileResult.content || "",prompt,true);
+                const fullFile =fileResult.content || "";
 
                 finalUserPrompt = `
-                    You are modifying a REAL workspace file.
-
                     USER REQUEST:
                     ${prompt}
 
-                    FILE:
-                    ${matchedFiles[0]}
-
-                    RELEVANT CODE SNIPPET:
+                    FULL FILE CONTENT:
 
                     \`\`\`
-                    ${snippet}
+                    ${fullFile}
                     \`\`\`
 
-                    Instructions:
-                    - Generate PRECISE edits only.
-                    - Never rewrite unrelated code.
-                    - Prefer replace operation.
-                    - Keep edits minimal.
-                    - target MUST already exist.
-                    - newText MUST contain replacement.
+                    IMPORTANT:
+                    - Return ONLY tool calls.
+                    - Rewrite the ENTIRE updated file.
+                    - Preserve all unrelated code.
+                    - Modify ONLY requested parts.
+                    - Do NOT omit any code.
                 `;
             }
         }
@@ -207,6 +210,73 @@ async function askAIBackend(prompt, onChunk) {
                 content: finalUserPrompt
             }
         ];
+
+
+// if (
+//     isEditRequest(prompt) &&
+//     matchedFiles.length > 0
+// ) {
+
+//     const intent =
+//         extractEditIntent(prompt);
+
+//     console.log(
+//         "EDIT INTENT:",
+//         intent
+//     );
+
+//     const fileResult =
+//         readFileTool({
+//             path:
+//                 matchedFiles[0]
+//         });
+
+//     if (fileResult?.success) {
+
+//         const patch =
+//             buildPatch(
+//                 fileResult.content || "",
+//                 intent
+//             );
+
+//         console.log(
+//             "PATCH:",
+//             patch
+//         );
+
+//         if (patch.success && patch.operation && patch.target && patch.newText) {
+
+//             const result =
+//                 modifyFileTool({
+
+//                     path:
+//                         matchedFiles[0] || "",
+
+//                     operation:
+//                         patch.operation,
+
+//                     target:
+//                         patch.target,
+
+//                     newText:
+//                         patch.newText
+//                 });
+
+//             console.log(
+//                 "PATCH RESULT:",
+//                 result
+//             );
+
+//             onChunk(
+//                 result.success
+//                     ? "Updated successfully."
+//                     : (result.error || "Modification Failed")
+//             );
+
+//             return;
+//         }
+//     }
+// }
 
         const maxIterations = 10;
 
@@ -266,60 +336,27 @@ async function askAIBackend(prompt, onChunk) {
 
                             function: {
                                 name: "modify_file",
-                                description: `
-                                    Modify files using precise operations.
+                                description:
+                                    `
+                                    Rewrite an entire file with updated content.
 
-                                    Operations:
-                                    - replace
-                                    - replace_all
-                                    - insert_before
-                                    - insert_after
-                                    - delete
-                                    - append
-                                    - prepend
-                                    - replace_function
-                                    - replace_between
+                                    IMPORTANT:
+                                    - ALWAYS return the FULL updated file content.
+                                    - NEVER return partial snippets.
+                                    - Preserve unrelated code exactly.
+                                    - Only modify requested parts.
+                                    - Maintain formatting and indentation.
                                 `,
-
                                 parameters: {
                                     type: "object",
                                     properties: {
                                         path: {
-                                            type: "string"
-                                        },
-
-                                        operation: {
-                                            type: "string"
-                                        },
-
-                                        target: {
-                                            type: "string"
-                                        },
-
-                                        newText: {
-                                            type: "string"
-                                        },
-
-                                        functionName: {
-                                            type: "string"
-                                        },
-
-                                        startAnchor: {
-                                            type: "string"
-                                        },
-
-                                        endAnchor: {
-                                            type: "string"
-                                        },
-
-                                        occurrence: {
-
                                             type: "string",
-                                            enum: ["first","last","all"]
+                                            description:
+                                                "Path to the file to modify."
                                         }
                                     },
-
-                                    required: ["path","operation"]
+                                    required: ["path"]
                                 }
                             }
                         }
@@ -328,7 +365,7 @@ async function askAIBackend(prompt, onChunk) {
                     options: {
                         temperature: 0.2,
                         top_p: 0.8,
-                        num_ctx: 4096
+                        num_ctx: 16384
                     }
                 });
 
@@ -362,6 +399,7 @@ async function askAIBackend(prompt, onChunk) {
                     }
 
                     if (parsed.name &&parsed.arguments) {
+                        parsedFallbackToolCall = true;
                         toolCalls = [
                             {
                                 function: {
@@ -382,8 +420,8 @@ async function askAIBackend(prompt, onChunk) {
 
             messages.push(response.message);
 
-            const requestedReadFiles =toolCalls.filter(t => t.function.name === "read_file").length;
-            let completedReadFiles = 0;
+            // const requestedReadFiles =toolCalls.filter(t => t.function.name === "read_file").length;
+            // let completedReadFiles = 0;
 
             for (const call of toolCalls) {
                 console.log( "EXECUTING:", call.function.name );
@@ -393,7 +431,7 @@ async function askAIBackend(prompt, onChunk) {
 
                 if (toolName === "read_file") {
                     const result =readFileTool(args);
-                    completedReadFiles++;
+                    // completedReadFiles++;
 
                     console.log("RESULT:", result);
 
@@ -429,16 +467,111 @@ async function askAIBackend(prompt, onChunk) {
                 }
 
                 else if (toolName === "modify_file") {
-                    const result =modifyFileTool(args);
+                   const requestedPath =args.path || "";
+                   const matchedPath =matchedFiles.find(file =>file.toLowerCase().endsWith(requestedPath.toLowerCase()));
+                    if (matchedPath) {
+                        args.path =matchedPath;
+                    }else{
+                        console.log("NO MATCHED FILE PATH FOUND");
+                        continue;
+                    }
 
-                    console.log("RESULT:", result);
+                    const fileResult =readFileTool({path: args.path});
+
+                    if (!fileResult?.success) {
+                        console.log("FAILED TO READ FILE");
+                        continue;
+                    }
+
+                    const rewriteResponse = await ollama.chat({
+                    
+                            model:
+                                "qwen2.5-coder:latest",
+                            messages: [
+                                {
+                                    role: "system",
+                                    content:
+                                        `
+                                        You are an expert code editor.
+
+                                        Current file:
+                                        ${args.path}
+                                        
+                                        Rewrite the ENTIRE file safely.
+
+                                        Requirements:
+                                        - Return the ENTIRE file.
+                                        - Modify ONLY requested parts.
+                                        - Never omit lines.
+                                        - Never summarize.
+                                        - Never explain.
+                                        - Never use markdown.
+                                        - Preserve unrelated code exactly.
+                                        - Output must be valid source code only.
+
+                                        You MUST return the COMPLETE updated file.
+                                        `
+                                },
+
+                                {
+                                    role: "user",
+                                    content:
+                                        `
+                                        USER REQUEST:
+                                        ${prompt}
+
+                                        FILE PATH:
+                                        ${args.path}
+
+                                        ORIGINAL FILE:
+                                        ${fileResult.content}
+                                        `
+                                }
+                            ],
+
+                            stream: false,
+                            options: {
+                                temperature: 0,
+                                top_p: 0.8,
+                                num_ctx: 32768
+                            }
+                        });
+                    
+                    if (!rewriteResponse?.message?.content) {
+                        console.log("NO REWRITE CONTENT GENERATED");
+                        continue;
+                    }
+
+                    args.content =sanitizeGeneratedCode(rewriteResponse.message.content || "");
+                    const allowsLargeDeletion =/remove|delete|replace whole|rewrite entire/i.test(prompt);
+                    const originalLines =(fileResult.content || "").split("\n").length;
+                    const newLines =args.content.split("\n").length;
+
+                    if (!allowsLargeDeletion &&newLines <originalLines * 0.4) {
+                        console.log("POSSIBLE TRUNCATED REWRITE");
+                        continue;
+                    }
+
+                    console.log("GENERATED CONTENT PREVIEW:");
+                    console.log(args.content.slice(0, 500));
+
+                    if (!args.content.trim()) {
+                        console.log("EMPTY GENERATED CONTENT");
+                        continue;
+                    }
+
+                    console.log("WRITING FILE:",args.path);
+                    console.log("CONTENT LENGTH:",args.content.length);
+
+                    const result = modifyFileTool(args);
+                    console.log("RESULT:",result);
 
                     messages.push({
                         role: "tool",
                         tool_call_id:
                             /** @type {any} */ (call).id,
                         content:
-                            JSON.stringify(result)
+                            "File modification completed successfully."
                     });
 
                     messages.push({
@@ -447,19 +580,22 @@ async function askAIBackend(prompt, onChunk) {
                             `
                             The file modification was completed successfully.
 
-                            Now respond naturally to the user.
+                            IMPORTANT:
+                            - The edit request has already been completed.
+                            - Do NOT call modify_file again.
+                            - Respond naturally to the user.
 
                             Do NOT output raw JSON.
                             Do NOT generate another tool call.
                             `
                     });
-
                 }
             }
-            if ( requestedReadFiles > 0 && completedReadFiles === requestedReadFiles ) { 
-                console.log( "All requested files read successfully." ); 
-                break; 
-            }
+
+            // if ( requestedReadFiles > 0 && completedReadFiles === requestedReadFiles ) { 
+            //     console.log( "All requested files read successfully." ); 
+            //     break; 
+            // }
         }
 
         messages.push({
@@ -499,7 +635,7 @@ async function askAIBackend(prompt, onChunk) {
                 options: {
                     temperature: 0,
                     top_p: 0.8,
-                    num_ctx: 4096
+                    num_ctx: 16384
                 }
             });
 
