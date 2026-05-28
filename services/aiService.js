@@ -55,6 +55,7 @@ function safeParseArgs(args) {
 async function askAIBackend(prompt, onChunk) {
     try {
         console.log("USER:", prompt);
+        const originalUserPrompt = prompt;
 
         const systemPrompt = `
             You are VRTX AI,
@@ -467,21 +468,25 @@ async function askAIBackend(prompt, onChunk) {
             All requested tool operations are complete.
 
             IMPORTANT:
-            - If workspace tree/tool output already contains
-            formatted structure, preserve it exactly.
-            - Do NOT summarize tree structures into prose.
-            - Do NOT rewrite formatted file trees.
-            - Preserve indentation and formatting.
+            The ORIGINAL USER REQUEST was:
 
-            Respond directly to the user's original request.
+            "${originalUserPrompt}"
 
-            IMPORTANT:
-            - Do NOT call more tools.
-            - Do NOT analyze workspace again.
-            - Do NOT summarize project structure unless requested.
-            - ONLY answer the user's request.
-            - Use the gathered tool results.
+            You MUST answer ONLY that request.
+
+            Rules:
+            - Do NOT summarize workspace structure.
+            - Do NOT explain unrelated code.
+            - Do NOT analyze architecture unless requested.
+            - Preserve the user's exact intent.
+            - If user asked for outputs only,
+            return outputs only.
+            - If user asked for comparison,
+            compare only requested behavior.
+
+            DO NOT call more tools.
             `
+
 
         });
 
