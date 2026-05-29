@@ -7,8 +7,6 @@ const {loadChatHistory} = require("./memoryService");
 const {buildMultiFileContext} = require("./MultipleFileService");
 const {modifyFileTool} = require("./editService");
 // const {extractRelevantSnippet} = require("./snippetService");
-// const {extractEditIntent} = require("./intentService");
-// const {buildPatch} = require("./patchService");
 
 /**
  * @param {string} text
@@ -108,6 +106,24 @@ async function askAIBackend(prompt, onChunk) {
             - ALWAYS call modify_file.
             - NEVER explain edits without tool calls.
             - NEVER return manual instructions instead of tool usage.
+
+            Output Analysis Rules:
+            - If the user asks for:
+            - output
+            - outputs
+            - what will this print
+            - execution result
+            - runtime result
+
+            Then:
+
+            1. Read files if necessary.
+            2. Analyze the code.
+            3. Return only the output.
+
+            NEVER call modify_file.
+            NEVER rewrite files.
+            NEVER edit files.
             `;
 
         const history = isFollowUp(prompt)? loadChatHistory().slice(-6): [];
@@ -210,73 +226,6 @@ async function askAIBackend(prompt, onChunk) {
                 content: finalUserPrompt
             }
         ];
-
-
-// if (
-//     isEditRequest(prompt) &&
-//     matchedFiles.length > 0
-// ) {
-
-//     const intent =
-//         extractEditIntent(prompt);
-
-//     console.log(
-//         "EDIT INTENT:",
-//         intent
-//     );
-
-//     const fileResult =
-//         readFileTool({
-//             path:
-//                 matchedFiles[0]
-//         });
-
-//     if (fileResult?.success) {
-
-//         const patch =
-//             buildPatch(
-//                 fileResult.content || "",
-//                 intent
-//             );
-
-//         console.log(
-//             "PATCH:",
-//             patch
-//         );
-
-//         if (patch.success && patch.operation && patch.target && patch.newText) {
-
-//             const result =
-//                 modifyFileTool({
-
-//                     path:
-//                         matchedFiles[0] || "",
-
-//                     operation:
-//                         patch.operation,
-
-//                     target:
-//                         patch.target,
-
-//                     newText:
-//                         patch.newText
-//                 });
-
-//             console.log(
-//                 "PATCH RESULT:",
-//                 result
-//             );
-
-//             onChunk(
-//                 result.success
-//                     ? "Updated successfully."
-//                     : (result.error || "Modification Failed")
-//             );
-
-//             return;
-//         }
-//     }
-// }
 
         const maxIterations = 10;
 
@@ -422,14 +371,22 @@ async function askAIBackend(prompt, onChunk) {
 
             // const requestedReadFiles =toolCalls.filter(t => t.function.name === "read_file").length;
             // let completedReadFiles = 0;
-
+            
+            let executedTool = false;
             for (const call of toolCalls) {
                 console.log( "EXECUTING:", call.function.name );
 
                 const toolName =call.function.name;
                 const args =safeParseArgs(call.function.arguments);
 
+                const wantsOutput =/\b(output|outputs|print|result|execution)\b/i.test(prompt);
+                if (wantsOutput &&toolName === "modify_file") {
+                    console.log("BLOCKED MODIFY_FILE FOR OUTPUT REQUEST");
+                    continue;
+                }
+
                 if (toolName === "read_file") {
+                    executedTool = true;
                     const result =readFileTool(args);
                     // completedReadFiles++;
 
@@ -445,6 +402,7 @@ async function askAIBackend(prompt, onChunk) {
                 }
 
                 else if (toolName ==="get_workspace_tree") {
+                    executedTool = true;
                     const tree =getWorkspaceTree();
         
                         console.log("RESULT:", tree);
@@ -467,8 +425,9 @@ async function askAIBackend(prompt, onChunk) {
                 }
 
                 else if (toolName === "modify_file") {
-                   const requestedPath =args.path || "";
-                   const matchedPath =matchedFiles.find(file =>file.toLowerCase().endsWith(requestedPath.toLowerCase()));
+                    executedTool = true;
+                    const requestedPath =args.path || "";
+                    const matchedPath =matchedFiles.find(file =>file.toLowerCase().endsWith(requestedPath.toLowerCase()));
                     if (matchedPath) {
                         args.path =matchedPath;
                     }else{
@@ -589,6 +548,11 @@ async function askAIBackend(prompt, onChunk) {
                             Do NOT generate another tool call.
                             `
                     });
+                }
+                
+                if (!executedTool) {
+                    console.log("NO TOOLS EXECUTED, BREAKING LOOP");
+                    break;
                 }
             }
 
