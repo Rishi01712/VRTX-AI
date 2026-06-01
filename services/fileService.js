@@ -32,7 +32,8 @@ async function indexWorkspaceFiles() {
                 file === "dist" ||
                 file === "build" ||
                 file === ".next" ||
-                file === ".vscode"
+                file === ".vscode" ||
+                file === ".semantic"
             ) {
                 continue;
             }
@@ -196,7 +197,8 @@ function getWorkspaceTree() {
                     "dist",
                     "build",
                     ".next",
-                    ".vscode"
+                    ".vscode",
+                    ".semantic"
                 ].includes(entry)
             );
 
@@ -226,8 +228,12 @@ function getWorkspaceTree() {
     return buildTree(rootPath);
 }
 
+function getIndexedFiles() {
+    return cachedFiles;
+}
+
 /**
  * @param {{ folder: string }} args
  */
 
-module.exports = {indexWorkspaceFiles,findRelevantFiles,readFileContent,readFileTool,getWorkspaceTree};
+module.exports = {indexWorkspaceFiles,findRelevantFiles,readFileContent,readFileTool,getWorkspaceTree,getIndexedFiles};

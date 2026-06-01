@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const {setupChatHandler} = require("./providers/chatProvider");
 const { indexWorkspaceFiles } = require("./services/fileService");
+const {buildSemanticIndex} = require("./semantic/embeddingService");
 
 /**
  * @param {vscode.Webview} webview
@@ -41,7 +42,18 @@ function getWebviewContent( webview, context ) {
  */
 async function activate(context) {
     console.log("EXTENSION ACTIVATED");
+
     await indexWorkspaceFiles();
+    console.log("Workspace indexed");
+
+    setTimeout(async () => {
+        try {
+            await buildSemanticIndex();
+        } catch (err) {
+            console.error(err);
+        }
+    }, 3000);
+
     const provider = {
         /**
          * @param {vscode.WebviewView} webviewView

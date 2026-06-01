@@ -6,7 +6,21 @@ const {findRelevantFiles,readFileTool,getWorkspaceTree} = require("./fileService
 const {loadChatHistory} = require("./memoryService");
 const {buildMultiFileContext} = require("./MultipleFileService");
 const {modifyFileTool} = require("./editService");
+const {semanticSearch} = require("../semantic/semanticSearchService");
+const {buildSemanticContext} = require("../semantic/chunkService");
+const {rerankResults} = require("../semantic/semanticSearchService");
+const { detectIntent } =require("./intentService");
 // const {extractRelevantSnippet} = require("./snippetService");
+
+/**
+ * @typedef {{
+ * path:string,
+ * content:string,
+ * score:number,
+ * chunkId:number,
+ * embedding:number[]
+ * }} SemanticResult
+ */
 
 /**
  * @param {string} text
@@ -66,6 +80,9 @@ function safeParseArgs(args) {
 async function askAIBackend(prompt, onChunk) {
     try {
         console.log("USER:", prompt);
+        const intent = detectIntent(prompt);
+        console.log("INTENT:",intent);
+
         const originalUserPrompt = prompt;
 
         const systemPrompt = `
@@ -99,6 +116,19 @@ async function askAIBackend(prompt, onChunk) {
             - Never assume workspace state from memory.
             - Always inspect real files when needed.
 
+            Semantic Retrieval Rules:
+            - Semantic context comes from real workspace files.
+            - Treat semantic context as trusted file content.
+            - Semantic context contains retrieved code chunks.
+            - Prefer semantic context before using tools.
+            - Use highest relevance results first.
+            - If semantic context already answers the question, do not call read_file.
+            - Only call read_file when semantic context is insufficient.
+            - Do not call get_workspace_tree when semantic context is sufficient.
+            - For file-identification questions, answer using semantic results.
+            - Use file content, symbols, imports and snippets.
+            - Never answer "none of the files" unless semantic results clearly support that conclusion.
+
             When modifying files:
             - ALWAYS return complete updated file content.
             - NEVER return partial patches.
@@ -124,6 +154,64 @@ async function askAIBackend(prompt, onChunk) {
             NEVER call modify_file.
             NEVER rewrite files.
             NEVER edit files.
+
+            File Identification Rules:
+
+            If the user asks:
+            - Which file
+            - What file
+            - Where is
+
+            Return:
+            - filename
+            - one-sentence explanation
+
+            Do not return:
+            - code snippets
+            - workspace trees
+            - tool calls
+            - unrelated files
+
+            Choose the most relevant semantic result unless the user explicitly asks for multiple files.
+
+            Never return code snippets unless explicitly requested.
+
+            For file-identification questions:
+
+            If semantic results already contain
+            the answer,
+
+            DO NOT call read_file.
+
+            Answer immediately.
+
+            Bug Analysis Rules:
+
+            - Never invent code.
+            - Never generate replacement code
+            unless requested.
+
+            - Only analyze code that was
+            retrieved from files.
+
+            - If evidence is insufficient,
+            say so.
+
+            - Cite actual functions,
+            variables and logic.
+
+            Project Analysis Rules:
+
+            - Use multiple files when needed.
+            - Explain relationships.
+            - Do not hallucinate workflows.
+
+            File Lookup Rules:
+
+            - Return filename and short reason.
+            - Do not output code.
+            - Do not call tools when semantic
+            context already answers.
             `;
 
         const history = isFollowUp(prompt)? loadChatHistory().slice(-6): [];
@@ -149,6 +237,27 @@ async function askAIBackend(prompt, onChunk) {
             matchedFiles =[...new Set(matchedFiles)];
         }
 
+        /** @type {SemanticResult[]} */
+        let semanticResults = [];
+        try {
+            const topScore =semanticResults[0]?.score || 0;
+            if (topScore < 0.5) {
+                console.log("LOW CONFIDENCE SEARCH");
+            }
+            
+            semanticResults =await semanticSearch(prompt,8);
+            semanticResults =rerankResults(semanticResults).slice(0,5);
+            console.log("SEMANTIC RESULTS:",semanticResults.length);
+
+            console.log("TOP SEMANTIC FILES:");
+            semanticResults.forEach(item => {
+                console.log(item.path,item.score);
+            });
+
+        } catch (err) {
+            console.error("SEMANTIC SEARCH ERROR:",err);
+        }
+
         console.log("Matched Files:",matchedFiles);
 
         let contextualPrompt = prompt;
@@ -165,6 +274,67 @@ async function askAIBackend(prompt, onChunk) {
             `;
         }
 
+        if (semanticResults.length > 0) {
+            const semanticContext =buildSemanticContext(semanticResults);
+            contextualPrompt = `
+                SEMANTIC CONTEXT:
+
+                ${semanticContext}
+
+                IMPORTANT:
+
+                The results are already ranked by relevance.
+
+                RESULT 1 is most relevant.
+                RESULT 2 is less relevant.
+                RESULT 3 is less relevant.
+
+                For questions asking:
+
+                - which file
+                - where is
+                - what module
+
+                prefer the highest ranked result.
+
+                Only use tools if semantic context is insufficient.
+
+                If the user asks:
+
+                - Which file
+                - What file
+                - Where is
+
+                Then answer ONLY with the filename and a brief reason.
+
+                Do NOT output code snippets.
+
+                Examples:
+
+                User:
+                Which file repeatedly asks for user input?
+
+                Correct:
+                calc.py — contains input() calls and an interactive loop.
+
+                Wrong:
+                <code snippet>
+
+                User:
+                Which file contains machine learning code?
+
+                Correct:
+                comp.py — trains a RandomForestClassifier.
+
+                Wrong:
+                <code snippet>
+
+                USER REQUEST:
+
+                ${prompt}
+            `;
+        }
+        
         else if (matchedFiles.length > 0) {
             const multiFileContext =await buildMultiFileContext(prompt);
             if (multiFileContext) {
@@ -328,6 +498,22 @@ async function askAIBackend(prompt, onChunk) {
             );
 
             let toolCalls =response.message.tool_calls || [];
+            const isSemanticQuestion =/(which\s+file|what\s+file|where\s+is|contains|related\s+to|predicts|uses|implements)/i.test(prompt);
+
+            if (semanticResults.length > 0 &&isSemanticQuestion &&toolCalls.length > 0) {
+                const onlyReadCalls =toolCalls.every(
+                        t =>
+                            t.function.name === "read_file" ||
+                            t.function.name === "get_workspace_tree"
+                    );
+
+                if (onlyReadCalls) {
+                    console.log("SEMANTIC ANSWER AVAILABLE - SKIPPING TOOLS");
+                    toolCalls = [];
+                    break;
+                }
+            }
+
             let parsedFallbackToolCall = false;
 
             console.log("ToolCalls:", JSON.stringify(toolCalls, null, 2) );
@@ -373,11 +559,57 @@ async function askAIBackend(prompt, onChunk) {
             // let completedReadFiles = 0;
             
             let executedTool = false;
+            const semanticOnlyQuestion =semanticResults.length > 0 && !isEditRequest(prompt);
+            if (semanticOnlyQuestion &&toolCalls.every(t => t.function.name === "read_file")) {
+                messages.push({
+                    role: "system",
+                    content: `
+                    Semantic retrieval already contains
+                    enough information.
+
+                    Do not call read_file.
+
+                    Answer directly.
+                    `
+                });
+                break;
+            
+            }
             for (const call of toolCalls) {
                 console.log( "EXECUTING:", call.function.name );
 
+                if (intent === "file_lookup" &&semanticResults.length > 0) {
+                    const top =semanticResults[0];
+                    onChunk(`${top.path}`);
+                    return;
+                }
+
+                if (intent === "bug_analysis") {
+                    const topFiles =semanticResults.slice(0,3).map(x => x.path);
+                    console.log("BUG ANALYSIS FILES:",topFiles);}
+
                 const toolName =call.function.name;
                 const args =safeParseArgs(call.function.arguments);
+
+                if (semanticResults.length > 0 &&isSemanticQuestion) {
+
+                    messages.push({
+                        role: "system",
+                        content: `
+                        The semantic search already found the answer.
+
+                        Highest ranked file:
+                        ${semanticResults[0].path}
+
+                        Do NOT call read_file.
+                        Do NOT call get_workspace_tree.
+
+                        Answer directly.
+                        `
+                    });
+
+                    break;
+                }
 
                 const wantsOutput =/\b(output|outputs|print|result|execution)\b/i.test(prompt);
                 if (wantsOutput &&toolName === "modify_file") {
@@ -427,7 +659,17 @@ async function askAIBackend(prompt, onChunk) {
                 else if (toolName === "modify_file") {
                     executedTool = true;
                     const requestedPath =args.path || "";
-                    const matchedPath =matchedFiles.find(file =>file.toLowerCase().endsWith(requestedPath.toLowerCase()));
+                    let matchedPath =matchedFiles.find(file =>file.toLowerCase().endsWith(requestedPath.toLowerCase()));
+
+                    if (!matchedPath) {
+                        const semanticMatch =semanticResults.find(result =>
+                                    result.path.toLowerCase().endsWith(
+                                        requestedPath.toLowerCase()
+                                    )
+                        );
+                        matchedPath =semanticMatch?.path;
+                    }
+                    
                     if (matchedPath) {
                         args.path =matchedPath;
                     }else{
