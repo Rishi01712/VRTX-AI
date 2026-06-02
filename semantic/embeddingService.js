@@ -1,7 +1,7 @@
 // @ts-check
 
 const { getIndexedFiles } =require("../services/fileService");
-const { chunkContent } =require("./chunkService");
+const { createSemanticChunks} =require("./chunkService");
 const {loadVectors,saveVectors,loadMetadata,saveMetadata} = require("./vectorStore");
 const {extractSymbols,generateSummary} = require("./symbolService");
 
@@ -57,11 +57,11 @@ async function buildSemanticIndex() {
                         item.path !== file
                 );
 
-            const chunks =chunkContent(content);
+            const chunks =createSemanticChunks(content,summary.language);
             console.log("CHUNKS:",file,chunks.length);
 
             for (let i = 0;i < chunks.length;i++) {
-                const chunk =chunks[i];
+                const semanticChunk =chunks[i];
                 const embeddingText = `
                     FILE:
                     ${file}
@@ -76,15 +76,24 @@ async function buildSemanticIndex() {
                     ${summary.symbols.join(", ")}
 
                     CONTENT:
-                    ${chunk}
+                    ${semanticChunk.content}
                 `;
 
                 const embedding =await generateEmbedding(embeddingText);
 
                 vectors.push({
                     path:file,
+
                     chunkId:i,
-                    content:chunk,
+
+                    chunkType:
+                        semanticChunk.type,
+
+                    symbol:
+                        semanticChunk.symbol,
+
+                    content:
+                        semanticChunk.content,
 
                     language:
                         summary.language,

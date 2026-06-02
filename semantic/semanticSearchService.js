@@ -4,6 +4,8 @@
  * @typedef {{
  * path:string,
  * chunkId:number,
+ * chunkType?:string,
+ * symbol?:string,
  * content:string,
  * embedding:number[],
  * language?:string,

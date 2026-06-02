@@ -1,34 +1,57 @@
 // @ts-check
 
+const Parser = require("tree-sitter");
+const JavaScript = require("tree-sitter-javascript");
+const Python = require("tree-sitter-python");
+const TypeScript = require("tree-sitter-typescript").typescript;
+
+/**
+ * @typedef {{
+ * type:string,
+ * symbol:string,
+ * content:string
+ * }} SemanticChunk
+ */
+
 const MAX_CHUNK_SIZE = 1200;
 const CHUNK_OVERLAP = 150;
 
 /**
+ * @param {string} language
+ */
+function getLanguage(language) {
+    switch (language) {
+        case "js":
+        case "jsx":
+            return JavaScript;
+
+        case "ts":
+        case "tsx":
+            return TypeScript;
+
+        case "py":
+            return Python;
+
+        default:
+            return null;
+    }
+}
+
+/**
+ * Fallback chunking
  * @param {string} content
  */
-function chunkContent(content) {
-    if (!content?.trim()) {
-        return [];
-    }
+function fallbackChunk(content) {
 
     const chunks = [];
+
     let start = 0;
     while (start < content.length) {
-        let end =Math.min(start + MAX_CHUNK_SIZE,content.length);
+        const end =Math.min(start + MAX_CHUNK_SIZE,content.length);
 
-        if (end < content.length) {
-            const nextNewLine =content.lastIndexOf("\n",end);
-            if (nextNewLine > start) {
-                end = nextNewLine;
-            }
-        }
+        chunks.push({type: "text",symbol: "",content:content.slice(start, end)});
 
-        const chunk =content.slice(start, end).trim();
-        if (chunk) {
-            chunks.push(chunk);
-        }
-
-        start =end - CHUNK_OVERLAP;
+        start = end - CHUNK_OVERLAP;
         if (start < 0) {
             start = 0;
         }
@@ -37,9 +60,85 @@ function chunkContent(content) {
             break;
         }
     }
-
     return chunks;
 }
+
+/**
+ * @param {string} content
+ * @param {string} language
+ */
+function createSemanticChunks(content,language) {
+    const grammar =getLanguage(language);
+    if (!grammar) {
+        return fallbackChunk(content);
+    }
+
+    try {
+        const parser =new Parser();
+        parser.setLanguage( /** @type {any} */ (grammar));
+
+        const tree =parser.parse(content);
+        /** @type {SemanticChunk[]} */
+        const chunks = [];
+
+        /**
+         * @param {any} node
+         */
+        function visit(node) {
+            const interestingTypes = [
+
+                "function_declaration",
+                "function_definition",
+
+                "method_definition",
+
+                "class_declaration",
+                "class_definition",
+
+                "lexical_declaration",
+
+                "interface_declaration",
+
+                "type_alias_declaration"
+            ];
+
+            if (interestingTypes.includes(node.type)) {
+
+                const text =content.slice(node.startIndex,node.endIndex);
+                const symbolNode =node.childForFieldName("name");
+
+                if (text.trim().length > 0) {
+                    chunks.push({
+                        type:
+                            node.type,
+
+                        symbol:
+                             symbolNode?.text || "",
+
+                        content:
+                            text
+                    });
+                }
+            }
+
+            for (let i = 0;i < node.namedChildCount;i++) {
+                visit(node.namedChild(i));
+            }
+        }
+        visit(tree.rootNode);
+
+        if (chunks.length === 0) {
+            return fallbackChunk(content);
+        }
+        return chunks;
+
+    } catch (err) {
+        console.error("TREE SITTER FAILED:",err);
+        return fallbackChunk(content);
+    }
+}
+
+
 
 /**
  * @typedef {{
@@ -103,4 +202,4 @@ function buildSemanticContext(results) {
     return context;
 }
 
-module.exports = {chunkContent, buildSemanticContext};
+module.exports = {createSemanticChunks, buildSemanticContext};
