@@ -66,6 +66,9 @@ async function semanticSearch(query,limit = 10) {
         item => {
             let score =cosineSimilarity(queryEmbedding,item.embedding);
             const lowerContent =item.content.toLowerCase();
+            const fileName =item.path.split(/[\\/]/).pop()?.toLowerCase() || "";
+            const fileBaseName =fileName.replace(/\.[^.]+$/, "");
+
             
             for (const word of queryWords) {
                 if (lowerContent.includes(word)) {
@@ -85,8 +88,11 @@ async function semanticSearch(query,limit = 10) {
                     score += 2;
                 }
 
-                if (item.path.toLowerCase().includes(word)) {
-                    score += 5;
+                if (fileName === word || fileBaseName === word) {
+                    score += 50;
+                }
+                else if (fileName.includes(word) ||fileBaseName.includes(word)) {
+                    score += 20;
                 }
             }
 

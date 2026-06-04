@@ -14,6 +14,17 @@ const { detectIntent } =require("./intentService");
 
 /**
  * @typedef {{
+ * file:string,
+ * timestamp:number,
+ * request:string
+ * }} ModificationRecord
+ */
+
+/** @type {ModificationRecord | null} */
+let lastModification = null;
+
+/**
+ * @typedef {{
  * path:string,
  * content:string,
  * score:number,
@@ -47,12 +58,12 @@ function isWorkspaceRequest(prompt) {
     return /\b(workspace|project|structure|architecture|folders|hierarchy|tree|codebase)\b/i.test(prompt);
 }
 
-/**
- * @param {string} prompt
- */
-function isEditRequest(prompt) {
-    return /\b(modify|edit|replace|refactor|update|rewrite|remove|delete|insert|append|prepend|add|fix|change)\b/i.test(prompt);
-}
+// /**
+//  * @param {string} prompt
+//  */
+// function isEditRequest(prompt) {
+//     return /\b(modify|edit|replace|refactor|update|rewrite|remove|delete|insert|append|prepend|add|fix|change)\b/i.test(prompt);
+// }
 
 /**
  * @param {string} prompt
@@ -60,6 +71,7 @@ function isEditRequest(prompt) {
 function shouldSearchFiles(prompt) {
     return /\b(file|js|ts|jsx|tsx|py|cpp|java|component|function|class|api|route|backend|frontend|module|auth|login|signup|database|server|client|bug|error|fix|modify|edit|replace|refactor|explain|analyze|workspace|project|structure|tree)\b/i.test(prompt);
 }
+
 
 /**
  * @param {any} args
@@ -82,6 +94,13 @@ async function askAIBackend(prompt, onChunk) {
         console.log("USER:", prompt);
         const intent = detectIntent(prompt);
         console.log("INTENT:",intent);
+
+        const modification = lastModification;
+        if (modification && /what.*fix|what.*changed|what.*modified/i.test(prompt)) {
+            onChunk(
+                `Last modified file: ${modification.file}\n` +`Request: ${modification.request}`);
+                return;
+        }
 
         const originalUserPrompt = prompt;
 
@@ -206,6 +225,13 @@ async function askAIBackend(prompt, onChunk) {
             - Explain relationships.
             - Do not hallucinate workflows.
 
+            For bug analysis:
+
+            - ALWAYS read the target file first.
+            - NEVER analyze semantic snippets alone.
+            - NEVER invent bugs.
+            - Only report bugs found in the actual file content.
+
             File Lookup Rules:
 
             - Return filename and short reason.
@@ -240,12 +266,11 @@ async function askAIBackend(prompt, onChunk) {
         /** @type {SemanticResult[]} */
         let semanticResults = [];
         try {
+            semanticResults =await semanticSearch(prompt,8);
             const topScore =semanticResults[0]?.score || 0;
             if (topScore < 0.5) {
                 console.log("LOW CONFIDENCE SEARCH");
             }
-            
-            semanticResults =await semanticSearch(prompt,8);
             semanticResults =rerankResults(semanticResults).slice(0,5);
             console.log("SEMANTIC RESULTS:",semanticResults.length);
 
@@ -356,7 +381,7 @@ async function askAIBackend(prompt, onChunk) {
         }
 
         let finalUserPrompt =contextualPrompt;
-        if (isEditRequest(prompt) && matchedFiles.length > 0) {
+        if (intent === "edit" && matchedFiles.length > 0) {
             const fileResult =readFileTool({path: matchedFiles[0]});
 
             if (fileResult?.success) {
@@ -559,7 +584,7 @@ async function askAIBackend(prompt, onChunk) {
             // let completedReadFiles = 0;
             
             let executedTool = false;
-            const semanticOnlyQuestion =semanticResults.length > 0 && !isEditRequest(prompt);
+            const semanticOnlyQuestion =semanticResults.length > 0 && intent === "file_lookup";
             if (semanticOnlyQuestion &&toolCalls.every(t => t.function.name === "read_file")) {
                 messages.push({
                     role: "system",
@@ -584,9 +609,21 @@ async function askAIBackend(prompt, onChunk) {
                     return;
                 }
 
-                if (intent === "bug_analysis") {
-                    const topFiles =semanticResults.slice(0,3).map(x => x.path);
-                    console.log("BUG ANALYSIS FILES:",topFiles);}
+                if (  intent === "bug_analysis" && toolCalls.length === 0) {
+                    const targetFile =matchedFiles[0] ||semanticResults[0]?.path;
+                    if (targetFile) {
+                        toolCalls = [
+                            {
+                                function: {
+                                    name: "read_file",
+                                    arguments: {
+                                        path: targetFile
+                                    }
+                                }
+                            }
+                        ];
+                    }
+                }
 
                 const toolName =call.function.name;
                 const args =safeParseArgs(call.function.arguments);
@@ -657,6 +694,15 @@ async function askAIBackend(prompt, onChunk) {
                 }
 
                 else if (toolName === "modify_file") {
+                    const fileWasRead =messages.some(m =>
+                        m.role === "tool" && String(m.content).includes("success")
+                    );
+                    
+                    if (!fileWasRead) {
+                        console.log("BLOCKED MODIFY_FILE WITHOUT READ_FILE");
+                        continue;
+                    }
+
                     executedTool = true;
                     const requestedPath =args.path || "";
                     let matchedPath =matchedFiles.find(file =>file.toLowerCase().endsWith(requestedPath.toLowerCase()));
@@ -765,6 +811,7 @@ async function askAIBackend(prompt, onChunk) {
                     console.log("CONTENT LENGTH:",args.content.length);
 
                     const result = modifyFileTool(args);
+                    lastModification = {file: args.path,timestamp: Date.now(),request: prompt};
                     console.log("RESULT:",result);
 
                     messages.push({

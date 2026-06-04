@@ -10,7 +10,7 @@ function detectIntent(prompt) {
         return "file_lookup";
     }
 
-    if (/(bug|bugs|logic error|logic errors|issue|issues|problem|problems|vulnerability|vulnerabilities|unsafe|crash|exception|debug)/i.test(p)) {
+    if (/(bug|bugs|logic error|logic errors|issue|issues|problem|problems|vulnerability|vulnerabilities|unsafe|crash|exception|debug|fault)/i.test(p)) {
         return "bug_analysis";
     }
 
