@@ -14,44 +14,15 @@
  * }} VectorEntry
  */
 const {generateEmbedding} = require("./embeddingService");
-const {loadVectors} = require("./vectorStore");
-// const {expandQuery} = require("./queryExpansionService");
-
-/**
- * @param {number[]} a
- * @param {number[]} b
- */
-function cosineSimilarity(a,b) {
-    let dot = 0;
-    let magA = 0;
-    let magB = 0;
-    for (let i = 0;i < a.length;i++) {
-        dot +=a[i] * b[i];
-        magA +=a[i] * a[i];
-        magB +=b[i] * b[i];
-    }
-
-    if (magA === 0 ||magB === 0) {
-        return 0;
-    }
-
-    return (dot /(Math.sqrt(magA) *Math.sqrt(magB)));
-}
+const {getTable} = require("./lanceStore");
 
 /**
  * @param {string} query
- * @param {number} limit
+ * @param {number} topK
  */
-async function semanticSearch(query,limit = 10) {
+async function semanticSearch(query,topK = 8) {
 
-    /** @type {VectorEntry[]} */
-    const vectors =loadVectors();
-    console.log("FIRST VECTOR:",JSON.stringify(vectors[0],null,2));
     console.log("QUERY:",query);
-
-    if (vectors.length === 0) {
-        return [];
-    }
 
     // const expandedQuery =await expandQuery(query);
     // console.log("EXPANDED QUERY:",expandedQuery);
@@ -59,52 +30,42 @@ async function semanticSearch(query,limit = 10) {
 
     
     const queryEmbedding =await generateEmbedding(query);
-    const queryWords =query.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
+    // const queryWords =query.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
     
-    const scored = vectors.map(/** @param {VectorEntry} item */
+    const table =await getTable();
+    const rows =await table.search(queryEmbedding).limit(topK * 4).toArray();
+    
+    return rows.map(row => ({
+        path: 
+            row.path,
+
+        chunkId: 
+            row.chunkId,
+
+        chunkType: 
+            row.chunkType,
+
+        symbol: 
+            row.symbol,
+
+        content: 
+            row.content,
+
+        language: 
+            row.language,
+
+        imports:
+            row.imports? row.imports.split("|"): [],
         
-        item => {
-            let score =cosineSimilarity(queryEmbedding,item.embedding);
-            const lowerContent =item.content.toLowerCase();
-            const fileName =item.path.split(/[\\/]/).pop()?.toLowerCase() || "";
-            const fileBaseName =fileName.replace(/\.[^.]+$/, "");
+        symbols:
+            row.symbols? row.symbols.split("|"): [],
 
-            
-            for (const word of queryWords) {
-                if (lowerContent.includes(word)) {
-                    score += 0.5;
-                }
+        embedding: 
+            row.embedding,
 
-                if (item.symbols?.some(symbol =>
-                        symbol.toLowerCase().includes(word)
-                    )) {
-                    score += 3;
-                }
-
-                if (item.imports?.some(
-                        imp =>
-                            imp.toLowerCase().includes(word)
-                    )) {
-                    score += 2;
-                }
-
-                if (fileName === word || fileBaseName === word) {
-                    score += 50;
-                }
-                else if (fileName.includes(word) ||fileBaseName.includes(word)) {
-                    score += 20;
-                }
-            }
-
-            return {
-                ...item,
-                score
-            };
-        }
-    );
-
-    scored.sort((a, b) =>b.score - a.score);
-    return scored.slice(0,limit);
+        score: 
+            1 - (row._distance || 0)
+    }));
 }
 
 /**

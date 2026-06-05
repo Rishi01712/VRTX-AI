@@ -9,6 +9,7 @@ document.addEventListener( "DOMContentLoaded", () => {
 
         let currentAIMessage = null;
         let currentMarkdown = "";
+        let currentStatus = "";
         let isGenerating = false;
 
         function enhanceCodeBlocks(container) {
@@ -64,25 +65,48 @@ document.addEventListener( "DOMContentLoaded", () => {
         /**
          * @param {string} chunk
          */
-        function streamAIChunk( chunk ) {
+        function streamAIChunk(chunk) {
             if (!messages) {
                 return;
             }
-
+            
             if (!currentAIMessage) {
-                currentAIMessage = document.createElement( "div");
-                currentAIMessage.className = "message ai";
-                messages.appendChild( currentAIMessage );
+                currentAIMessage =document.createElement("div");
+                currentAIMessage.className ="message ai";
+
+                messages.appendChild(currentAIMessage);
                 currentMarkdown = "";
             }
 
-            currentMarkdown += chunk;
-            currentAIMessage.innerHTML = marked.parse( currentMarkdown );
-            enhanceCodeBlocks(currentAIMessage);
+            if (chunk.startsWith("__STATUS__")) {
+
+                isShowingStatus = true;
+                const status =chunk.replace("__STATUS__", "");
+
+                if (!currentAIMessage) {
+                    currentAIMessage =document.createElement("div");
+                    currentAIMessage.className ="message ai";
+                    messages.appendChild(currentAIMessage);
+                }
+
+                currentAIMessage.textContent =status;
+                return;
+            }
+
+            if (isShowingStatus) {
+                isShowingStatus = false;
+                currentMarkdown = "";
+                currentAIMessage.innerHTML = "";
+            }
             
-            const isNearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120;
-            if(isNearBottom) {
-                messages.scrollTop = messages.scrollHeight;
+            currentMarkdown += chunk;
+            currentAIMessage.innerHTML =marked.parse(currentMarkdown);
+            console.log(currentAIMessage.innerHTML);
+            enhanceCodeBlocks(currentAIMessage);
+
+            const isNearBottom =messages.scrollHeight -messages.scrollTop -messages.clientHeight <120;
+            if (isNearBottom) {
+                messages.scrollTop =messages.scrollHeight;
             }
         }
 
@@ -146,8 +170,9 @@ document.addEventListener( "DOMContentLoaded", () => {
                         break;
 
                     case "streamEnd":
+                        currentStatus = "";
                         currentAIMessage = null;
-                        currentMarkdown =   "";
+                        currentMarkdown = "";
                         setGeneratingState(false);
                         break;
 

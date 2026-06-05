@@ -6,7 +6,7 @@
 function detectIntent(prompt) {
     const p = prompt.toLowerCase();
 
-    if (/(which file|what file|where is|which module|contains|uses|imports|related to|predicts|defined in)/i.test(p)) {
+    if (/(which file|what file|where is|contains|uses|imports|related to|predicts|takes input|reads input|user input|defined in|implemented in)/i.test(p)) {
         return "file_lookup";
     }
 

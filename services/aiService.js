@@ -6,11 +6,10 @@ const {findRelevantFiles,readFileTool,getWorkspaceTree} = require("./fileService
 const {loadChatHistory} = require("./memoryService");
 const {buildMultiFileContext} = require("./MultipleFileService");
 const {modifyFileTool} = require("./editService");
-const {semanticSearch} = require("../semantic/semanticSearchService");
+const {semanticSearch,rerankResults} = require("../semantic/semanticSearchService");
 const {buildSemanticContext} = require("../semantic/chunkService");
-const {rerankResults} = require("../semantic/semanticSearchService");
 const { detectIntent } =require("./intentService");
-// const {extractRelevantSnippet} = require("./snippetService");
+const {routeTools} = require("../semantic/toolRouter");
 
 /**
  * @typedef {{
@@ -22,6 +21,9 @@ const { detectIntent } =require("./intentService");
 
 /** @type {ModificationRecord | null} */
 let lastModification = null;
+const path = require("path");
+
+// let isShowingStatus = false;
 
 /**
  * @typedef {{
@@ -92,8 +94,60 @@ function safeParseArgs(args) {
 async function askAIBackend(prompt, onChunk) {
     try {
         console.log("USER:", prompt);
+        /**
+        * @param {string} message
+        */
+        function sendToolStatus(message) {
+            onChunk(
+                "__STATUS__" + message
+            );
+        }
+
+        /**
+        * @param {number} ms
+        */
+        function sleep(ms) {
+            return new Promise(resolve =>
+                setTimeout(resolve, ms)
+            );
+        }
         const intent = detectIntent(prompt);
         console.log("INTENT:",intent);
+
+        /**
+         * @typedef {{
+         * name:string,
+         * description:string,
+         * embedding?:number[]
+         * }} ToolDefinition
+         */
+
+        /** @type {ToolDefinition[]} */
+        let routedTools = [];
+        const needsWorkspace = shouldSearchFiles(prompt) ||intent === "file_lookup" ||intent === "bug_analysis" ||intent === "edit" ||intent === "project_analysis";
+        if (needsWorkspace) {
+            routedTools =await routeTools(prompt,3);
+        }
+        // console.log("ROUTED TOOLS:",routedTools.map(t => t.name));
+        if(needsWorkspace) {
+            sendToolStatus("Analyzing request...");
+            await sleep(500);
+        }
+
+        let allowedTools =routedTools.map(t => t.name);
+
+        if(intent === "file_lookup") {
+            allowedTools = ["semantic_search"];
+        }
+        
+        if(intent === "bug_analysis") {
+            allowedTools = ["semantic_search","read_file"];
+        }
+        
+        if(intent === "edit") {
+            allowedTools = ["semantic_search","read_file","modify_file"];
+        }
+        console.log("ALLOWED TOOLS:",allowedTools);
 
         const modification = lastModification;
         if (modification && /what.*fix|what.*changed|what.*modified/i.test(prompt)) {
@@ -238,6 +292,13 @@ async function askAIBackend(prompt, onChunk) {
             - Do not output code.
             - Do not call tools when semantic
             context already answers.
+
+            Workspace Discovery Rules:
+
+            - Before reading files, use semantic_search.
+            - semantic_search is the preferred workspace discovery tool.
+            - Use read_file only after identifying relevant files.
+            - Do not call get_workspace_tree unless specifically needed.
             `;
 
         const history = isFollowUp(prompt)? loadChatHistory().slice(-6): [];
@@ -263,21 +324,27 @@ async function askAIBackend(prompt, onChunk) {
             matchedFiles =[...new Set(matchedFiles)];
         }
 
+        const useAutomaticSemantic = false;
         /** @type {SemanticResult[]} */
         let semanticResults = [];
         try {
-            semanticResults =await semanticSearch(prompt,8);
-            const topScore =semanticResults[0]?.score || 0;
-            if (topScore < 0.5) {
-                console.log("LOW CONFIDENCE SEARCH");
+            if (useAutomaticSemantic) {
+                semanticResults =await semanticSearch(prompt,8);
+                semanticResults =rerankResults(semanticResults).slice(0,5);
             }
-            semanticResults =rerankResults(semanticResults).slice(0,5);
-            console.log("SEMANTIC RESULTS:",semanticResults.length);
 
-            console.log("TOP SEMANTIC FILES:");
-            semanticResults.forEach(item => {
-                console.log(item.path,item.score);
-            });
+            // semanticResults =await semanticSearch(prompt,8);
+            // const topScore =semanticResults[0]?.score || 0;
+            // if (topScore < 0.5) {
+            //     console.log("LOW CONFIDENCE SEARCH");
+            // }
+            // semanticResults =rerankResults(semanticResults).slice(0,5);
+            // console.log("SEMANTIC RESULTS:",semanticResults.length);
+
+            // console.log("TOP SEMANTIC FILES:");
+            // semanticResults.forEach(item => {
+            //     console.log(item.path,item.score);
+            // });
 
         } catch (err) {
             console.error("SEMANTIC SEARCH ERROR:",err);
@@ -299,66 +366,66 @@ async function askAIBackend(prompt, onChunk) {
             `;
         }
 
-        if (semanticResults.length > 0) {
-            const semanticContext =buildSemanticContext(semanticResults);
-            contextualPrompt = `
-                SEMANTIC CONTEXT:
+        // if (semanticResults.length > 0) {
+        //     const semanticContext =buildSemanticContext(semanticResults);
+        //     contextualPrompt = `
+        //         SEMANTIC CONTEXT:
 
-                ${semanticContext}
+        //         ${semanticContext}
 
-                IMPORTANT:
+        //         IMPORTANT:
 
-                The results are already ranked by relevance.
+        //         The results are already ranked by relevance.
 
-                RESULT 1 is most relevant.
-                RESULT 2 is less relevant.
-                RESULT 3 is less relevant.
+        //         RESULT 1 is most relevant.
+        //         RESULT 2 is less relevant.
+        //         RESULT 3 is less relevant.
 
-                For questions asking:
+        //         For questions asking:
 
-                - which file
-                - where is
-                - what module
+        //         - which file
+        //         - where is
+        //         - what module
 
-                prefer the highest ranked result.
+        //         prefer the highest ranked result.
 
-                Only use tools if semantic context is insufficient.
+        //         Only use tools if semantic context is insufficient.
 
-                If the user asks:
+        //         If the user asks:
 
-                - Which file
-                - What file
-                - Where is
+        //         - Which file
+        //         - What file
+        //         - Where is
 
-                Then answer ONLY with the filename and a brief reason.
+        //         Then answer ONLY with the filename and a brief reason.
 
-                Do NOT output code snippets.
+        //         Do NOT output code snippets.
 
-                Examples:
+        //         Examples:
 
-                User:
-                Which file repeatedly asks for user input?
+        //         User:
+        //         Which file repeatedly asks for user input?
 
-                Correct:
-                calc.py — contains input() calls and an interactive loop.
+        //         Correct:
+        //         calc.py — contains input() calls and an interactive loop.
 
-                Wrong:
-                <code snippet>
+        //         Wrong:
+        //         <code snippet>
 
-                User:
-                Which file contains machine learning code?
+        //         User:
+        //         Which file contains machine learning code?
 
-                Correct:
-                comp.py — trains a RandomForestClassifier.
+        //         Correct:
+        //         comp.py — trains a RandomForestClassifier.
 
-                Wrong:
-                <code snippet>
+        //         Wrong:
+        //         <code snippet>
 
-                USER REQUEST:
+        //         USER REQUEST:
 
-                ${prompt}
-            `;
-        }
+        //         ${prompt}
+        //     `;
+        // }
         
         else if (matchedFiles.length > 0) {
             const multiFileContext =await buildMultiFileContext(prompt);
@@ -428,13 +495,8 @@ async function askAIBackend(prompt, onChunk) {
         while (iteration < maxIterations) {
             iteration++;
 
-            const response =await ollama.chat({
-
-                    model:
-                        "qwen3.5:0.8b",
-                    messages,
-                    stream: false,
-                    tools: [
+            /** @type {import("ollama").Tool[]} */
+            const allTools =[
 
                         {
                             type: "function",
@@ -462,8 +524,7 @@ async function askAIBackend(prompt, onChunk) {
                             type: "function",
 
                             function: {
-                                name:
-                                    "get_workspace_tree",
+                                name: "get_workspace_tree",
                                 description:
                                     "Get workspace hierarchy",
 
@@ -503,8 +564,57 @@ async function askAIBackend(prompt, onChunk) {
                                     required: ["path"]
                                 }
                             }
+                        },
+
+                        {
+                            type: "function",
+
+                            function: {
+                                name: "semantic_search",
+                                description:
+                                    `
+                                    Search the workspace semantically.
+
+                                    Use this tool FIRST when:
+                                    - locating files
+                                    - finding symbols
+                                    - finding classes
+                                    - finding functions
+                                    - finding bugs
+                                    - finding related modules
+
+                                    This is preferred over read_file.
+
+                                    Use read_file only after semantic_search
+                                    identifies relevant files.
+                                    `,
+
+                                parameters: {
+                                    type: "object",
+                                    properties: {
+                                        query: {
+                                            type: "string"
+                                        }
+                                    }   
+                                }
+                            }
                         }
-                    ],
+                    ];
+            
+            /** @type {import("ollama").Tool[]} */
+            let visibleTools = [];
+            if(needsWorkspace) {
+                visibleTools =allTools.filter(tool =>
+                        tool.function.name &&allowedTools.includes(tool.function.name)
+                );
+            }
+
+            const response =await ollama.chat({
+                    model:
+                        "qwen3.5:0.8b",
+                    messages,
+                    stream: false,
+                    tools:  visibleTools.length > 0? visibleTools: undefined,
 
                     options: {
                         temperature: 0.2,
@@ -600,33 +710,53 @@ async function askAIBackend(prompt, onChunk) {
                 break;
             
             }
+
+            if (intent === "bug_analysis" && toolCalls.length === 0) {
+                const targetFile =matchedFiles[0] ||semanticResults[0]?.path;
+                if (targetFile) {
+                    toolCalls = [
+                        {
+                            function: {
+                                name: "read_file",
+                                arguments: {
+                                    path: targetFile
+                                }
+                            }
+                        }
+                    ];
+                }
+            }
+
             for (const call of toolCalls) {
                 console.log( "EXECUTING:", call.function.name );
-
+   
                 if (intent === "file_lookup" &&semanticResults.length > 0) {
                     const top =semanticResults[0];
                     onChunk(`${top.path}`);
                     return;
                 }
 
-                if (  intent === "bug_analysis" && toolCalls.length === 0) {
-                    const targetFile =matchedFiles[0] ||semanticResults[0]?.path;
-                    if (targetFile) {
-                        toolCalls = [
-                            {
-                                function: {
-                                    name: "read_file",
-                                    arguments: {
-                                        path: targetFile
-                                    }
-                                }
-                            }
-                        ];
-                    }
+                const toolName =call.function.name;
+
+                if (intent === "file_lookup" &&toolName === "read_file") {
+                    messages.push({
+                        role:"tool",
+                        tool_call_id: /** @type {any} */ (call).id || "tool_call",
+                        content:
+                        "File lookup questions should use semantic_search results only. Do not call read_file."
+                    });
+                    continue;
                 }
 
-                const toolName =call.function.name;
-                const args =safeParseArgs(call.function.arguments);
+                if(!allowedTools.includes(toolName)) {
+                    console.log("BLOCKED TOOL:",toolName);
+                    continue;
+                }
+
+                const args = safeParseArgs(call.function.arguments);
+                if ((toolName === "read_file" || toolName === "modify_file") && args.query && !args.path) {
+                    args.path = args.query;
+                }
 
                 if (semanticResults.length > 0 &&isSemanticQuestion) {
 
@@ -656,7 +786,10 @@ async function askAIBackend(prompt, onChunk) {
 
                 if (toolName === "read_file") {
                     executedTool = true;
+                    const fileName =path.basename(args.path || "");
+                    sendToolStatus(`Reading ${fileName}`);
                     const result =readFileTool(args);
+                    await sleep(500);
                     // completedReadFiles++;
 
                     console.log("RESULT:", result);
@@ -672,9 +805,13 @@ async function askAIBackend(prompt, onChunk) {
 
                 else if (toolName ==="get_workspace_tree") {
                     executedTool = true;
+                    sendToolStatus("Analyzing workspace");
                     const tree =getWorkspaceTree();
+                    await sleep(500);
+                    sendToolStatus(" Workspace analyzed");
+                    await sleep(500);
         
-                        console.log("RESULT:", tree);
+                    console.log("RESULT:", tree);
 
                     messages.push({
                         role: "tool",
@@ -693,9 +830,30 @@ async function askAIBackend(prompt, onChunk) {
                     });
                 }
 
+                else if (toolName === "semantic_search") {
+                    sendToolStatus(`Searching code: ${args.query}`);
+                    const results = rerankResults(await semanticSearch(args.query,8)).slice(0,5);
+                    await sleep(500);
+
+                    // if (intent === "file_lookup" &&results.length > 0) {
+                    //     const top = results[0];
+                    //     onChunk(`${top.path} — highest semantic match`);
+                    //     return;
+                    // }
+
+                    messages.push({
+                        role: "tool",
+                        content:buildSemanticContext(results)
+                    });
+                    const fileName =path.basename(results[0]?.path || "");
+                    sendToolStatus(`Found in ${fileName}`);
+                    await sleep(500);;
+                    continue;
+                }
+
                 else if (toolName === "modify_file") {
                     const fileWasRead =messages.some(m =>
-                        m.role === "tool" && String(m.content).includes("success")
+                        m.role === "tool" && String(m.content).includes('"content"')
                     );
                     
                     if (!fileWasRead) {
@@ -729,6 +887,8 @@ async function askAIBackend(prompt, onChunk) {
                         console.log("FAILED TO READ FILE");
                         continue;
                     }
+
+                    console.log("TOOL RESULT SIZE:",JSON.stringify(messages).length);
 
                     const rewriteResponse = await ollama.chat({
                     
@@ -808,9 +968,14 @@ async function askAIBackend(prompt, onChunk) {
                     }
 
                     console.log("WRITING FILE:",args.path);
+                    const fileName =path.basename(args.path || "");
+                    sendToolStatus(`Writing ${fileName}`);
+                    await sleep(500);
                     console.log("CONTENT LENGTH:",args.content.length);
 
                     const result = modifyFileTool(args);
+                    sendToolStatus(`Saved ${fileName}`);
+                    await sleep(500);
                     lastModification = {file: args.path,timestamp: Date.now(),request: prompt};
                     console.log("RESULT:",result);
 
@@ -879,6 +1044,7 @@ async function askAIBackend(prompt, onChunk) {
 
         });
 
+        sendToolStatus("Generating response...");
         const finalResponse =await ollama.chat({
 
                 model:
