@@ -102,7 +102,11 @@ document.addEventListener( "DOMContentLoaded", () => {
             currentMarkdown += chunk;
             currentAIMessage.innerHTML =marked.parse(currentMarkdown);
             console.log(currentAIMessage.innerHTML);
-            enhanceCodeBlocks(currentAIMessage);
+            
+            currentAIMessage.innerHTML =marked.parse(currentMarkdown);
+            requestAnimationFrame(() => {
+                enhanceCodeBlocks(currentAIMessage);
+            });
 
             const isNearBottom =messages.scrollHeight -messages.scrollTop -messages.clientHeight <120;
             if (isNearBottom) {

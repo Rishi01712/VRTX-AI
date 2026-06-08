@@ -20,6 +20,12 @@ const toolDefinitions = [
     },
 
     {
+        name: "run_command",
+        description:
+            "Execute terminal commands and shell commands"
+    },
+
+    {
         name: "read_file",
         description:
             "Read actual file contents for debugging, workflow analysis and code inspection"

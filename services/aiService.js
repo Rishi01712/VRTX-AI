@@ -10,6 +10,7 @@ const {semanticSearch,rerankResults} = require("../semantic/semanticSearchServic
 const {buildSemanticContext} = require("../semantic/chunkService");
 const { detectIntent } =require("./intentService");
 const {routeTools} = require("../semantic/toolRouter");
+const {runCommand} = require("./terminalService");
 
 /**
  * @typedef {{
@@ -122,31 +123,21 @@ async function askAIBackend(prompt, onChunk) {
          * }} ToolDefinition
          */
 
-        /** @type {ToolDefinition[]} */
-        let routedTools = [];
-        const needsWorkspace = shouldSearchFiles(prompt) ||intent === "file_lookup" ||intent === "bug_analysis" ||intent === "edit" ||intent === "project_analysis";
-        if (needsWorkspace) {
-            routedTools =await routeTools(prompt,3);
-        }
-        // console.log("ROUTED TOOLS:",routedTools.map(t => t.name));
-        if(needsWorkspace) {
-            sendToolStatus("Analyzing request...");
-            await sleep(500);
-        }
-
-        let allowedTools =routedTools.map(t => t.name);
-
-        if(intent === "file_lookup") {
-            allowedTools = ["semantic_search"];
+        /** @type {string[]} */
+        let allowedTools = [];
+        if (intent === "terminal") {
+            allowedTools = ["run_command"];
         }
         
-        if(intent === "bug_analysis") {
-            allowedTools = ["semantic_search","read_file"];
+        else if (intent === "workspace") {
+            const routedTools =await routeTools(prompt,4);
+            allowedTools =routedTools.map(t => t.name);
+
+            if (!allowedTools.includes("get_workspace_tree")) {
+                allowedTools.push("get_workspace_tree");
+            }
         }
-        
-        if(intent === "edit") {
-            allowedTools = ["semantic_search","read_file","modify_file"];
-        }
+
         console.log("ALLOWED TOOLS:",allowedTools);
 
         const modification = lastModification;
@@ -171,6 +162,7 @@ async function askAIBackend(prompt, onChunk) {
             - inspect files
             - modify files
             - refactor systems
+            - execute terminal commands
 
             General Rules:
             - Be concise and technical.
@@ -299,6 +291,54 @@ async function askAIBackend(prompt, onChunk) {
             - semantic_search is the preferred workspace discovery tool.
             - Use read_file only after identifying relevant files.
             - Do not call get_workspace_tree unless specifically needed.
+
+            Terminal Rules:
+
+            - Never invent file paths.
+            - Never use /home, /path/to/repo, C:\project or placeholder paths.
+            - The current VS Code workspace is already the working directory.
+            - Execute commands directly.
+            - For git status use:
+                git status
+
+            - For git branches use:
+                git branch
+
+            - For current directory use:
+                pwd (Linux/macOS)
+                cd (Windows)
+
+            - Do not prepend cd commands unless the user explicitly specifies a path.
+
+            When using run_command:
+
+            You MUST execute commands exactly as they would be typed
+            inside the currently opened VS Code workspace.
+
+            NEVER generate:
+
+            cd /workspace
+            cd /home
+            cd /path/to/repo
+            cd C:\project
+
+            Examples:
+
+            User: check git status
+            Correct:
+            git status
+
+            User: show branches
+            Correct:
+            git branch
+
+            User: run test.py
+            Correct:
+            python test.py
+
+            User: list files
+            Correct:
+            dir
             `;
 
         const history = isFollowUp(prompt)? loadChatHistory().slice(-6): [];
@@ -448,7 +488,7 @@ async function askAIBackend(prompt, onChunk) {
         }
 
         let finalUserPrompt =contextualPrompt;
-        if (intent === "edit" && matchedFiles.length > 0) {
+        if (allowedTools.includes("modify_file") && matchedFiles.length > 0) {
             const fileResult =readFileTool({path: matchedFiles[0]});
 
             if (fileResult?.success) {
@@ -570,6 +610,42 @@ async function askAIBackend(prompt, onChunk) {
                             type: "function",
 
                             function: {
+                                name: "run_command",
+
+                                description:
+                                    `
+                                    Execute any terminal command.
+
+                                    Examples:
+                                    - npm install
+                                    - npm run build
+                                    - python app.py
+                                    - git status
+                                    - docker ps
+
+                                    Returns stdout and stderr.
+                                    `,
+
+                                parameters: {
+                                    type: "object",
+
+                                    properties: {
+                                        command: {
+                                            type: "string",
+                                            description:
+                                                "Terminal command to execute"
+                                        }
+
+                                    },
+                                    required: ["command"]
+                                }
+                            }
+                        },
+
+                        {
+                            type: "function",
+
+                            function: {
                                 name: "semantic_search",
                                 description:
                                     `
@@ -602,12 +678,11 @@ async function askAIBackend(prompt, onChunk) {
                     ];
             
             /** @type {import("ollama").Tool[]} */
-            let visibleTools = [];
-            if(needsWorkspace) {
-                visibleTools =allTools.filter(tool =>
-                        tool.function.name &&allowedTools.includes(tool.function.name)
-                );
-            }
+            const visibleTools = allTools.filter(tool =>
+                tool.function.name && allowedTools.includes(tool.function.name)
+            );
+
+            console.log("VISIBLE TOOLS:",visibleTools.map(t => t.function.name));
 
             const response =await ollama.chat({
                     model:
@@ -694,66 +769,21 @@ async function askAIBackend(prompt, onChunk) {
             // let completedReadFiles = 0;
             
             let executedTool = false;
-            const semanticOnlyQuestion =semanticResults.length > 0 && intent === "file_lookup";
-            if (semanticOnlyQuestion &&toolCalls.every(t => t.function.name === "read_file")) {
-                messages.push({
-                    role: "system",
-                    content: `
-                    Semantic retrieval already contains
-                    enough information.
-
-                    Do not call read_file.
-
-                    Answer directly.
-                    `
-                });
-                break;
-            
-            }
-
-            if (intent === "bug_analysis" && toolCalls.length === 0) {
-                const targetFile =matchedFiles[0] ||semanticResults[0]?.path;
-                if (targetFile) {
-                    toolCalls = [
-                        {
-                            function: {
-                                name: "read_file",
-                                arguments: {
-                                    path: targetFile
-                                }
-                            }
-                        }
-                    ];
-                }
-            }
-
             for (const call of toolCalls) {
                 console.log( "EXECUTING:", call.function.name );
-   
-                if (intent === "file_lookup" &&semanticResults.length > 0) {
-                    const top =semanticResults[0];
-                    onChunk(`${top.path}`);
-                    return;
-                }
 
                 const toolName =call.function.name;
-
-                if (intent === "file_lookup" &&toolName === "read_file") {
-                    messages.push({
-                        role:"tool",
-                        tool_call_id: /** @type {any} */ (call).id || "tool_call",
-                        content:
-                        "File lookup questions should use semantic_search results only. Do not call read_file."
-                    });
-                    continue;
-                }
-
                 if(!allowedTools.includes(toolName)) {
                     console.log("BLOCKED TOOL:",toolName);
                     continue;
                 }
 
                 const args = safeParseArgs(call.function.arguments);
+
+                if (intent === "terminal" &&typeof args.command === "string") {
+                    args.command = args.command.replace(/^cd\s+\/workspace\s+&&\s*/i, "").replace(/^cd\s+\/home\s+&&\s*/i, "").replace(/^cd\s+.*?&&\s*/i, "");
+                }
+
                 if ((toolName === "read_file" || toolName === "modify_file") && args.query && !args.path) {
                     args.path = args.query;
                 }
@@ -849,6 +879,49 @@ async function askAIBackend(prompt, onChunk) {
                     sendToolStatus(`Found in ${fileName}`);
                     await sleep(500);;
                     continue;
+                }
+
+                else if (toolName === "run_command") {
+                    executedTool = true;
+                    sendToolStatus(`Running command: ${args.command}`);
+                    const result =await runCommand(args.command);
+                    await sleep(500);
+
+                    if (intent === "terminal") {
+                        const output =result.stdout ||result.stderr ||"No output";
+                        onChunk("```bash\n" +output +"\n```");
+                        return;
+                    }
+                    
+                    if(result.success) {
+                        sendToolStatus("Command completed");
+                        await sleep(500);
+                    } else {
+                        sendToolStatus("Command failed");
+                    }
+
+                    messages.push({
+                        role: "tool",
+                        tool_call_id:
+                            /** @type {any} */ (call).id,
+                        content:
+                            JSON.stringify(result)
+                    });
+
+                    messages.push({
+                        role: "system",
+                        content: `
+                        The command has already been executed.
+
+                        Do NOT run additional commands.
+
+                        Do NOT investigate further.
+
+                        Analyze the command output and answer the user.
+                        `
+                    });
+                    toolCalls = [];
+                    break;
                 }
 
                 else if (toolName === "modify_file") {

@@ -4,46 +4,22 @@
  * @param {string} prompt
  */
 function detectIntent(prompt) {
+
     const p = prompt.toLowerCase();
 
-    if (/(which file|what file|where is|contains|uses|imports|related to|predicts|takes input|reads input|user input|defined in|implemented in)/i.test(p)) {
-        return "file_lookup";
+    const terminalKeywords = ["git","branch","commit","checkout","merge","rebase","npm","pnpm","yarn","python","node","docker","terminal","command","run","execute","pip","cargo","gradle","maven","powershell","cmd","shell","build","start","dev","test"];
+
+    if (terminalKeywords.some(keyword => p.includes(keyword))) {
+        return "terminal";
     }
 
-    if (/(bug|bugs|logic error|logic errors|issue|issues|problem|problems|vulnerability|vulnerabilities|unsafe|crash|exception|debug|fault)/i.test(p)) {
-        return "bug_analysis";
-    }
+    const workspaceKeywords = ["file","folder","class","function","method","module","workspace","project","codebase","bug","error","issue","explain","analyze","where is","which file","modify","edit","rewrite","refactor","update","delete","add"];
 
-    if (/(workflow|flow|architecture|how does|explain project|data flow|execution flow|trace execution|project structure)/i.test(p)) {
-        return "project_analysis";
-    }
-
-    if (/(modify|edit|rewrite|replace|refactor|remove|delete|add|update)/i.test(p)) {
-        return "edit";
+    if (workspaceKeywords.some(keyword => p.includes(keyword))) {
+        return "workspace";
     }
 
     return "general";
 }
 
-
-/**
- * @param {any[]} files
- */
-function buildAnalysisContext(files) {
-    let context ="PROJECT ANALYSIS CONTEXT\n\n";
-    for (const file of files) {
-        context += `
-            FILE:
-            ${file.path}
-
-            CONTENT:
-            ${file.content}
-
-            ------------------------
-            `;
-    }
-
-    return context;
-}
-
-module.exports = { buildAnalysisContext,detectIntent };
+module.exports = {detectIntent};
