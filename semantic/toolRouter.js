@@ -8,52 +8,93 @@ const { generateEmbedding } = require("./embeddingService");
  * description:string,
  * embedding?:number[],
  * score?:number
- * }} ToolDefinition
+ * }} Definition
  */
 
-/** @type {ToolDefinition[]} */
+/** @type {Definition[]} */
 const toolDefinitions = [
+
     {
         name: "semantic_search",
         description:
-            "Find files, classes, functions, symbols, imports and modules semantically"
+            "Find files classes functions symbols imports modules and code semantically"
     },
 
     {
         name: "run_command",
         description:
-            "Execute terminal commands and shell commands"
+            "Execute terminal shell git npm docker python node commands"
     },
 
     {
         name: "read_file",
         description:
-            "Read actual file contents for debugging, workflow analysis and code inspection"
+            "Read file contents for debugging inspection analysis"
     },
 
     {
         name: "modify_file",
         description:
-            "Modify file contents and save changes"
+            "Modify edit rewrite update source code files"
     },
 
     {
         name: "get_workspace_tree",
         description:
-            "List folders and files in workspace"
+            "Analyze workspace project folders structure hierarchy"
+    }
+];
+
+/** @type {Definition[]} */
+const intentDefinitions = [
+
+    {
+        name: "terminal",
+        description:
+            "Run terminal commands git npm docker shell execute programs"
+    },
+
+    {
+        name: "file_lookup",
+        description:
+            "Find which file contains a class function symbol module"
+    },
+
+    {
+        name: "bug_analysis",
+        description:
+            "Analyze bugs errors crashes exceptions debugging"
+    },
+
+    {
+        name: "edit",
+        description:
+            "Modify update rewrite refactor source code"
+    },
+
+    {
+        name: "project_analysis",
+        description:
+            "Explain architecture workflow structure project"
     }
 ];
 
 let initialized = false;
 
-async function initializeTools() {
+async function initializeEmbeddings() {
+
     if (initialized) {
         return;
     }
 
     for (const tool of toolDefinitions) {
-        tool.embedding =await generateEmbedding(tool.description);
+        tool.embedding = await generateEmbedding(tool.description);
     }
+
+    for (const intent of intentDefinitions) {
+        intent.embedding = await generateEmbedding(intent.description);
+    }
+
     initialized = true;
 }
 
@@ -62,50 +103,46 @@ async function initializeTools() {
  * @param {number[]} b
  */
 function cosineSimilarity(a,b) {
+
     let dot = 0;
     let magA = 0;
     let magB = 0;
+
     for (let i = 0;i < a.length;i++) {
-        dot +=a[i] * b[i];
-        magA +=a[i] * a[i];
-        magB +=b[i] * b[i];
+        dot += a[i] * b[i];
+        magA += a[i] * a[i];
+        magB += b[i] * b[i];
     }
 
-    if (magA === 0 ||magB === 0) {
+    if (!magA || !magB) {
         return 0;
     }
 
-    return (dot /(Math.sqrt(magA) *Math.sqrt(magB)));
+    return dot /(Math.sqrt(magA) * Math.sqrt(magB));
 }
 
-
 /**
- * @param {string} query
+ * @param {string} prompt
  * @param {number} limit
- * @returns {Promise<ToolDefinition[]>}
  */
-async function routeTools(query,limit = 3) {
+async function routeTools(prompt, limit = 3) {
 
-    await initializeTools();
-    const queryEmbedding =await generateEmbedding(query);
+    await initializeEmbeddings();
 
-    /** @type {ToolDefinition[]} */
+    const queryEmbedding =await generateEmbedding(prompt);
+
     const scored =toolDefinitions.map(tool => ({
+            ...tool,
 
-                ...tool,
+            score:
+                cosineSimilarity(queryEmbedding,tool.embedding || [])
+        }));
 
-                score:
-                    tool.embedding? cosineSimilarity(queryEmbedding,tool.embedding): 0
-            })
-        );
+    scored.sort((a,b) =>
+        (b.score || 0) - (a.score || 0)
+    );
 
-    scored.sort((a, b) =>(b.score || 0) -(a.score || 0));
-    return scored.slice(0,limit);
+    return scored.slice(0, limit);
 }
 
-/**
- * @param {string} intent
- * @param {any[]} availableTools
- */
-
-module.exports = {routeTools,cosineSimilarity,toolDefinitions};
+module.exports = {routeTools,toolDefinitions,cosineSimilarity};

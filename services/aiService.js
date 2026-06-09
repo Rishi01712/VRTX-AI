@@ -8,7 +8,6 @@ const {buildMultiFileContext} = require("./MultipleFileService");
 const {modifyFileTool} = require("./editService");
 const {semanticSearch,rerankResults} = require("../semantic/semanticSearchService");
 const {buildSemanticContext} = require("../semantic/chunkService");
-const { detectIntent } =require("./intentService");
 const {routeTools} = require("../semantic/toolRouter");
 const {runCommand} = require("./terminalService");
 
@@ -72,7 +71,7 @@ function isWorkspaceRequest(prompt) {
  * @param {string} prompt
  */
 function shouldSearchFiles(prompt) {
-    return /\b(file|js|ts|jsx|tsx|py|cpp|java|component|function|class|api|route|backend|frontend|module|auth|login|signup|database|server|client|bug|error|fix|modify|edit|replace|refactor|explain|analyze|workspace|project|structure|tree)\b/i.test(prompt);
+    return /\b(file|folder|directory|component|api|route|backend|frontend|module|auth|login|signup|database|server|client|bug|error|fix|modify|edit|replace|refactor|explain|analyze|workspace|project|structure|tree)\b/i.test(prompt);
 }
 
 
@@ -112,33 +111,87 @@ async function askAIBackend(prompt, onChunk) {
                 setTimeout(resolve, ms)
             );
         }
-        const intent = detectIntent(prompt);
-        console.log("INTENT:",intent);
+
+        const p = prompt.toLowerCase();
+        const isGreeting =/^(hi|hello|hey|yo)$/i.test(prompt.trim());
+        
+        const isGeneralCodingQuestion =/(code for|implement|example|syntax|dfs|bfs|binary search|linked list|dynamic programming|segment tree|graph algorithm)/i.test(p);
+        
+        const isTerminalRequest =/(git|branch|commit|checkout|merge|rebase|npm|pnpm|yarn|python|node|docker|terminal|command|run|execute|pip|cargo|gradle|maven)/i.test(p);
+
+        const routedTools = await routeTools(prompt,5);
+        // console.log("ROUTED TOOLS:",routedTools.map(t => t.name));
+        console.log(routedTools.map(t => ({
+            name: t.name,
+            score: t.score
+        })));
+
+        const TOOL_THRESHOLD = 0.50;
+        const filteredTools = routedTools.filter(t => 
+            (t.score || 0) >= TOOL_THRESHOLD
+        );
+
+        console.log("FILTERED:",filteredTools.map(t => ({
+            name: t.name,
+            score: t.score
+        })));
+
+        /** @type {Record<string,string[]>} */
+        const toolDependencies = {
+            modify_file: ["read_file"],
+            
+            read_file: ["semantic_search"]
+        };
 
         /**
-         * @typedef {{
-         * name:string,
-         * description:string,
-         * embedding?:number[]
-         * }} ToolDefinition
+         * @param {string[]} tools
          */
+        function expandTools(tools) {
+            const expanded = new Set();
+            /**
+             * @param {string} tool
+             */
+            function add(tool) {
+                expanded.add(tool);
+                const deps = toolDependencies[tool] || [];
+                
+                for (const dep of deps) {
+                    add(dep);
+                }
+            }
+            
+            for (const tool of tools) {
+                add(tool);
+            }
+            
+            return [...expanded];
+        }
 
-        /** @type {string[]} */
+        /** @type {Array<string>} */
         let allowedTools = [];
-        if (intent === "terminal") {
+        if (isGreeting) {
+            allowedTools = [];
+        }
+        else if (isGeneralCodingQuestion) {
+            allowedTools = [];
+        }
+        else if (isTerminalRequest) {
             allowedTools = ["run_command"];
         }
-        
-        else if (intent === "workspace") {
-            const routedTools =await routeTools(prompt,4);
-            allowedTools =routedTools.map(t => t.name);
-
-            if (!allowedTools.includes("get_workspace_tree")) {
-                allowedTools.push("get_workspace_tree");
-            }
+        else if (/\b(read|open|explain|analyze|inspect|show)\b/i.test(p) &&/\.[a-z0-9]+\b/i.test(p)) {
+            allowedTools = ["semantic_search","read_file"];
         }
-
-        console.log("ALLOWED TOOLS:",allowedTools);
+        else if (/\b(workspace|project|folder structure|tree|architecture)\b/i.test(p)) {
+            allowedTools = ["get_workspace_tree"];
+        }
+        else if (/\b(edit|modify|rewrite|replace|update|refactor|delete|remove)\b/i.test(p)) {
+            allowedTools = ["semantic_search","read_file","modify_file"];
+        }
+        else {
+            allowedTools =expandTools(filteredTools.map(t => t.name));
+            allowedTools =[...new Set(allowedTools)];
+        }
+        console.log("FINAL TOOLS:",allowedTools);
 
         const modification = lastModification;
         if (modification && /what.*fix|what.*changed|what.*modified/i.test(prompt)) {
@@ -364,7 +417,7 @@ async function askAIBackend(prompt, onChunk) {
             matchedFiles =[...new Set(matchedFiles)];
         }
 
-        const useAutomaticSemantic = false;
+        const useAutomaticSemantic = true;
         /** @type {SemanticResult[]} */
         let semanticResults = [];
         try {
@@ -393,7 +446,7 @@ async function askAIBackend(prompt, onChunk) {
         console.log("Matched Files:",matchedFiles);
 
         let contextualPrompt = prompt;
-        if (isWorkspaceRequest(prompt)) {
+        if (isWorkspaceRequest(prompt) && allowedTools.includes("get_workspace_tree")) {
             const workspaceTree =getWorkspaceTree();
 
             contextualPrompt = `
@@ -780,7 +833,7 @@ async function askAIBackend(prompt, onChunk) {
 
                 const args = safeParseArgs(call.function.arguments);
 
-                if (intent === "terminal" &&typeof args.command === "string") {
+                if (allowedTools.includes("run_command") &&typeof args.command === "string") {
                     args.command = args.command.replace(/^cd\s+\/workspace\s+&&\s*/i, "").replace(/^cd\s+\/home\s+&&\s*/i, "").replace(/^cd\s+.*?&&\s*/i, "");
                 }
 
@@ -887,7 +940,7 @@ async function askAIBackend(prompt, onChunk) {
                     const result =await runCommand(args.command);
                     await sleep(500);
 
-                    if (intent === "terminal") {
+                    if (toolName === "run_command" && allowedTools.length === 1) {
                         const output =result.stdout ||result.stderr ||"No output";
                         onChunk("```bash\n" +output +"\n```");
                         return;
