@@ -11,6 +11,8 @@ document.addEventListener( "DOMContentLoaded", () => {
         let currentMarkdown = "";
         let currentStatus = "";
         let isGenerating = false;
+        let statusMessage = null;
+        let isShowingStatus = false;
 
         function enhanceCodeBlocks(container) {
             container.querySelectorAll("pre").forEach(pre => {
@@ -70,6 +72,11 @@ document.addEventListener( "DOMContentLoaded", () => {
                 return;
             }
             
+            if (statusMessage) {
+                statusMessage.remove();
+                statusMessage = null;
+            }
+
             if (!currentAIMessage) {
                 currentAIMessage =document.createElement("div");
                 currentAIMessage.className ="message ai";
@@ -78,18 +85,17 @@ document.addEventListener( "DOMContentLoaded", () => {
                 currentMarkdown = "";
             }
 
-            if (chunk.startsWith("__STATUS__")) {
+            const statusMatch = chunk.match(/^__STATUS__(.*)$/s);
+            if (statusMatch) {
 
-                isShowingStatus = true;
-                const status =chunk.replace("__STATUS__", "");
-
-                if (!currentAIMessage) {
-                    currentAIMessage =document.createElement("div");
-                    currentAIMessage.className ="message ai";
-                    messages.appendChild(currentAIMessage);
+                const status = chunk.replace(/^__STATUS__/, "");
+                if (!statusMessage) {
+                    statusMessage = document.createElement("div");
+                    statusMessage.className = "message status";
+                    messages.appendChild(statusMessage);
                 }
 
-                currentAIMessage.textContent =status;
+                statusMessage.textContent = status;
                 return;
             }
 
@@ -97,6 +103,10 @@ document.addEventListener( "DOMContentLoaded", () => {
                 isShowingStatus = false;
                 currentMarkdown = "";
                 currentAIMessage.innerHTML = "";
+            }
+
+            if (chunk.startsWith("__STATUS__")) {
+                return;
             }
             
             currentMarkdown += chunk;
@@ -170,6 +180,10 @@ document.addEventListener( "DOMContentLoaded", () => {
                         break;
 
                     case "streamEnd":
+                        if (statusMessage) {
+                            statusMessage.remove();
+                            statusMessage = null;
+                        }
                         currentStatus = "";
                         currentAIMessage = null;
                         currentMarkdown = "";

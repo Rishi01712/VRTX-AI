@@ -8,7 +8,6 @@ const {buildMultiFileContext} = require("./MultipleFileService");
 const {modifyFileTool} = require("./editService");
 const {semanticSearch,rerankResults} = require("../semantic/semanticSearchService");
 const {buildSemanticContext} = require("../semantic/chunkService");
-const {routeTools} = require("../semantic/toolRouter");
 const {runCommand} = require("./terminalService");
 
 /**
@@ -71,7 +70,9 @@ function isWorkspaceRequest(prompt) {
  * @param {string} prompt
  */
 function shouldSearchFiles(prompt) {
-    return /\b(file|folder|directory|component|api|route|backend|frontend|module|auth|login|signup|database|server|client|bug|error|fix|modify|edit|replace|refactor|explain|analyze|workspace|project|structure|tree)\b/i.test(prompt);
+    return (/\b(file|folder|directory|component|api|route|backend|frontend|module|auth|login|signup|database|server|client|bug|error|fix|modify|edit|replace|refactor|explain|analyze|workspace|project|structure|tree)\b/i.test(prompt) 
+        || /\b\w+\.(py|js|ts|tsx|jsx|cpp|c|java|cs|go|rs)\b/i.test(prompt)
+    );
 }
 
 
@@ -112,87 +113,6 @@ async function askAIBackend(prompt, onChunk) {
             );
         }
 
-        const p = prompt.toLowerCase();
-        const isGreeting =/^(hi|hello|hey|yo)$/i.test(prompt.trim());
-        
-        const isGeneralCodingQuestion =/(code for|implement|example|syntax|dfs|bfs|binary search|linked list|dynamic programming|segment tree|graph algorithm)/i.test(p);
-        
-        const isTerminalRequest =/(git|branch|commit|checkout|merge|rebase|npm|pnpm|yarn|python|node|docker|terminal|command|run|execute|pip|cargo|gradle|maven)/i.test(p);
-
-        const routedTools = await routeTools(prompt,5);
-        // console.log("ROUTED TOOLS:",routedTools.map(t => t.name));
-        console.log(routedTools.map(t => ({
-            name: t.name,
-            score: t.score
-        })));
-
-        const TOOL_THRESHOLD = 0.50;
-        const filteredTools = routedTools.filter(t => 
-            (t.score || 0) >= TOOL_THRESHOLD
-        );
-
-        console.log("FILTERED:",filteredTools.map(t => ({
-            name: t.name,
-            score: t.score
-        })));
-
-        /** @type {Record<string,string[]>} */
-        const toolDependencies = {
-            modify_file: ["read_file"],
-            
-            read_file: ["semantic_search"]
-        };
-
-        /**
-         * @param {string[]} tools
-         */
-        function expandTools(tools) {
-            const expanded = new Set();
-            /**
-             * @param {string} tool
-             */
-            function add(tool) {
-                expanded.add(tool);
-                const deps = toolDependencies[tool] || [];
-                
-                for (const dep of deps) {
-                    add(dep);
-                }
-            }
-            
-            for (const tool of tools) {
-                add(tool);
-            }
-            
-            return [...expanded];
-        }
-
-        /** @type {Array<string>} */
-        let allowedTools = [];
-        if (isGreeting) {
-            allowedTools = [];
-        }
-        else if (isGeneralCodingQuestion) {
-            allowedTools = [];
-        }
-        else if (isTerminalRequest) {
-            allowedTools = ["run_command"];
-        }
-        else if (/\b(read|open|explain|analyze|inspect|show)\b/i.test(p) &&/\.[a-z0-9]+\b/i.test(p)) {
-            allowedTools = ["semantic_search","read_file"];
-        }
-        else if (/\b(workspace|project|folder structure|tree|architecture)\b/i.test(p)) {
-            allowedTools = ["get_workspace_tree"];
-        }
-        else if (/\b(edit|modify|rewrite|replace|update|refactor|delete|remove)\b/i.test(p)) {
-            allowedTools = ["semantic_search","read_file","modify_file"];
-        }
-        else {
-            allowedTools =expandTools(filteredTools.map(t => t.name));
-            allowedTools =[...new Set(allowedTools)];
-        }
-        console.log("FINAL TOOLS:",allowedTools);
-
         const modification = lastModification;
         if (modification && /what.*fix|what.*changed|what.*modified/i.test(prompt)) {
             onChunk(
@@ -201,6 +121,8 @@ async function askAIBackend(prompt, onChunk) {
         }
 
         const originalUserPrompt = prompt;
+        const wantsFileRead =/\b(read|explain|analyze|inspect|compare)\b/i.test(prompt);
+        const wantsOutput =/\b(output|outputs|execution|result|print)\b/i.test(prompt);
 
         const systemPrompt = `
             You are VRTX AI,
@@ -238,9 +160,20 @@ async function askAIBackend(prompt, onChunk) {
             - Semantic context comes from real workspace files.
             - Treat semantic context as trusted file content.
             - Semantic context contains retrieved code chunks.
-            - Prefer semantic context before using tools.
+
+            Semantic search is only for discovery.
+
+            After identifying a relevant file,
+            use read_file whenever the user asks:
+                - read
+                - explain
+                - analyze
+                - inspect
+                - compare
+                - output
+                - execution
+                
             - Use highest relevance results first.
-            - If semantic context already answers the question, do not call read_file.
             - Only call read_file when semantic context is insufficient.
             - Do not call get_workspace_tree when semantic context is sufficient.
             - For file-identification questions, answer using semantic results.
@@ -273,6 +206,14 @@ async function askAIBackend(prompt, onChunk) {
             NEVER rewrite files.
             NEVER edit files.
 
+            When user asks:
+            - explain
+            - analyze
+
+            Do NOT return full file content.
+
+            Summarize the file instead.
+
             File Identification Rules:
 
             If the user asks:
@@ -302,6 +243,12 @@ async function askAIBackend(prompt, onChunk) {
             DO NOT call read_file.
 
             Answer immediately.
+
+            Return:
+            filename — one sentence explanation
+
+            Example:
+            comp.py — trains a RandomForestClassifier and predicts malicious traffic.
 
             Bug Analysis Rules:
 
@@ -344,6 +291,10 @@ async function askAIBackend(prompt, onChunk) {
             - semantic_search is the preferred workspace discovery tool.
             - Use read_file only after identifying relevant files.
             - Do not call get_workspace_tree unless specifically needed.
+
+            For output prediction:
+            ALWAYS read the file first.
+            Never answer from semantic snippets alone.
 
             Terminal Rules:
 
@@ -415,9 +366,10 @@ async function askAIBackend(prompt, onChunk) {
                 }
             }
             matchedFiles =[...new Set(matchedFiles)];
+            
         }
 
-        const useAutomaticSemantic = true;
+        const useAutomaticSemantic = shouldSearchFiles(prompt);
         /** @type {SemanticResult[]} */
         let semanticResults = [];
         try {
@@ -442,11 +394,12 @@ async function askAIBackend(prompt, onChunk) {
         } catch (err) {
             console.error("SEMANTIC SEARCH ERROR:",err);
         }
-
+        
         console.log("Matched Files:",matchedFiles);
 
         let contextualPrompt = prompt;
-        if (isWorkspaceRequest(prompt) && allowedTools.includes("get_workspace_tree")) {
+
+        if (isWorkspaceRequest(prompt)) {
             const workspaceTree =getWorkspaceTree();
 
             contextualPrompt = `
@@ -520,7 +473,7 @@ async function askAIBackend(prompt, onChunk) {
         //     `;
         // }
         
-        else if (matchedFiles.length > 0) {
+        else if (matchedFiles.length > 1 &&! wantsFileRead &&! wantsOutput) {
             const multiFileContext =await buildMultiFileContext(prompt);
             if (multiFileContext) {
                 contextualPrompt =multiFileContext;
@@ -541,31 +494,31 @@ async function askAIBackend(prompt, onChunk) {
         }
 
         let finalUserPrompt =contextualPrompt;
-        if (allowedTools.includes("modify_file") && matchedFiles.length > 0) {
-            const fileResult =readFileTool({path: matchedFiles[0]});
+        // if ( matchedFiles.length > 0) {
+        //     const fileResult =readFileTool({path: matchedFiles[0]});
 
-            if (fileResult?.success) {
-                const fullFile =fileResult.content || "";
+        //     if (fileResult?.success) {
+        //         const fullFile =fileResult.content || "";
 
-                finalUserPrompt = `
-                    USER REQUEST:
-                    ${prompt}
+        //         finalUserPrompt = `
+        //             USER REQUEST:
+        //             ${prompt}
 
-                    FULL FILE CONTENT:
+        //             FULL FILE CONTENT:
 
-                    \`\`\`
-                    ${fullFile}
-                    \`\`\`
+        //             \`\`\`
+        //             ${fullFile}
+        //             \`\`\`
 
-                    IMPORTANT:
-                    - Return ONLY tool calls.
-                    - Rewrite the ENTIRE updated file.
-                    - Preserve all unrelated code.
-                    - Modify ONLY requested parts.
-                    - Do NOT omit any code.
-                `;
-            }
-        }
+        //             IMPORTANT:
+        //             - Return ONLY tool calls.
+        //             - Rewrite the ENTIRE updated file.
+        //             - Preserve all unrelated code.
+        //             - Modify ONLY requested parts.
+        //             - Do NOT omit any code.
+        //         `;
+        //     }
+        // }
 
         /** @type {any[]} */
         const messages = [
@@ -651,7 +604,7 @@ async function askAIBackend(prompt, onChunk) {
                                         path: {
                                             type: "string",
                                             description:
-                                                "Path to the file to modify."
+                                                "Filename only. Example: merge.py"
                                         }
                                     },
                                     required: ["path"]
@@ -729,20 +682,14 @@ async function askAIBackend(prompt, onChunk) {
                             }
                         }
                     ];
-            
-            /** @type {import("ollama").Tool[]} */
-            const visibleTools = allTools.filter(tool =>
-                tool.function.name && allowedTools.includes(tool.function.name)
-            );
-
-            console.log("VISIBLE TOOLS:",visibleTools.map(t => t.function.name));
-
+                
+            sendToolStatus("Thinking...");
             const response =await ollama.chat({
                     model:
-                        "qwen3.5:0.8b",
+                        "qwen3.5:4b",
                     messages,
                     stream: false,
-                    tools:  visibleTools.length > 0? visibleTools: undefined,
+                    tools: allTools,
 
                     options: {
                         temperature: 0.2,
@@ -762,20 +709,6 @@ async function askAIBackend(prompt, onChunk) {
 
             let toolCalls =response.message.tool_calls || [];
             const isSemanticQuestion =/(which\s+file|what\s+file|where\s+is|contains|related\s+to|predicts|uses|implements)/i.test(prompt);
-
-            if (semanticResults.length > 0 &&isSemanticQuestion &&toolCalls.length > 0) {
-                const onlyReadCalls =toolCalls.every(
-                        t =>
-                            t.function.name === "read_file" ||
-                            t.function.name === "get_workspace_tree"
-                    );
-
-                if (onlyReadCalls) {
-                    console.log("SEMANTIC ANSWER AVAILABLE - SKIPPING TOOLS");
-                    toolCalls = [];
-                    break;
-                }
-            }
 
             let parsedFallbackToolCall = false;
 
@@ -826,14 +759,9 @@ async function askAIBackend(prompt, onChunk) {
                 console.log( "EXECUTING:", call.function.name );
 
                 const toolName =call.function.name;
-                if(!allowedTools.includes(toolName)) {
-                    console.log("BLOCKED TOOL:",toolName);
-                    continue;
-                }
-
                 const args = safeParseArgs(call.function.arguments);
 
-                if (allowedTools.includes("run_command") &&typeof args.command === "string") {
+                if (typeof args.command === "string") {
                     args.command = args.command.replace(/^cd\s+\/workspace\s+&&\s*/i, "").replace(/^cd\s+\/home\s+&&\s*/i, "").replace(/^cd\s+.*?&&\s*/i, "");
                 }
 
@@ -841,25 +769,25 @@ async function askAIBackend(prompt, onChunk) {
                     args.path = args.query;
                 }
 
-                if (semanticResults.length > 0 &&isSemanticQuestion) {
+                // if (semanticResults.length > 0 &&isSemanticQuestion) {
 
-                    messages.push({
-                        role: "system",
-                        content: `
-                        The semantic search already found the answer.
+                //     messages.push({
+                //         role: "system",
+                //         content: `
+                //         The semantic search already found the answer.
 
-                        Highest ranked file:
-                        ${semanticResults[0].path}
+                //         Highest ranked file:
+                //         ${semanticResults[0].path}
 
-                        Do NOT call read_file.
-                        Do NOT call get_workspace_tree.
+                //         Do NOT call read_file.
+                //         Do NOT call get_workspace_tree.
 
-                        Answer directly.
-                        `
-                    });
+                //         Answer directly.
+                //         `
+                //     });
 
-                    break;
-                }
+                //     break;
+                // }
 
                 const wantsOutput =/\b(output|outputs|print|result|execution)\b/i.test(prompt);
                 if (wantsOutput &&toolName === "modify_file") {
@@ -876,11 +804,13 @@ async function askAIBackend(prompt, onChunk) {
                     // completedReadFiles++;
 
                     console.log("RESULT:", result);
+                    const toolCallId =
+                    /** @type {any} */ (call).id ||
+                    `tool_${Date.now()}`;
 
                     messages.push({
                         role: "tool",
-                        tool_call_id:
-                            /** @type {any} */ (call).id,
+                        tool_call_id:toolCallId,
                         content:
                             JSON.stringify(result)
                     });
@@ -895,11 +825,13 @@ async function askAIBackend(prompt, onChunk) {
                     await sleep(500);
         
                     console.log("RESULT:", tree);
+                    const toolCallId =
+                    /** @type {any} */ (call).id ||
+                    `tool_${Date.now()}`;
 
                     messages.push({
                         role: "tool",
-                        tool_call_id:
-                            /** @type {any} */ (call).id,
+                        tool_call_id:toolCallId,
                         content:
                             `
                             WORKSPACE TREE:
@@ -918,18 +850,31 @@ async function askAIBackend(prompt, onChunk) {
                     const results = rerankResults(await semanticSearch(args.query,8)).slice(0,5);
                     await sleep(500);
 
+                    console.log("SEMANTIC FILES:",results.map(r => ({file: r.path,score: r.score})));
+
+                    if (results.length > 0 &&isSemanticQuestion) {
+                        onChunk(`${path.basename(results[0].path)} — highest semantic match`);
+                        return;
+                    }
+                    
                     // if (intent === "file_lookup" &&results.length > 0) {
                     //     const top = results[0];
                     //     onChunk(`${top.path} — highest semantic match`);
                     //     return;
                     // }
 
+                    const toolCallId =
+                    /** @type {any} */ (call).id ||
+                    `tool_${Date.now()}`;
+
                     messages.push({
                         role: "tool",
-                        content:buildSemanticContext(results)
+                        tool_call_id: toolCallId,
+                        content: buildSemanticContext(results)
                     });
-                    const fileName =path.basename(results[0]?.path || "");
-                    sendToolStatus(`Found in ${fileName}`);
+
+                    const files =results.slice(0,3).map(r => path.basename(r.path)).join(", ");
+                    sendToolStatus(`Found candidates: ${files}`);
                     await sleep(500);;
                     continue;
                 }
@@ -937,28 +882,25 @@ async function askAIBackend(prompt, onChunk) {
                 else if (toolName === "run_command") {
                     executedTool = true;
                     sendToolStatus(`Running command: ${args.command}`);
-                    const result =await runCommand(args.command);
+
+                    const result = await runCommand(args.command);
                     await sleep(500);
 
-                    if (toolName === "run_command" && allowedTools.length === 1) {
-                        const output =result.stdout ||result.stderr ||"No output";
-                        onChunk("```bash\n" +output +"\n```");
-                        return;
-                    }
-                    
-                    if(result.success) {
+                    if (result.success) {
                         sendToolStatus("Command completed");
-                        await sleep(500);
                     } else {
                         sendToolStatus("Command failed");
                     }
+                    await sleep(500);
+
+                    const toolCallId =
+                        /** @type {any} */ (call).id ||
+                        `tool_${Date.now()}`;
 
                     messages.push({
                         role: "tool",
-                        tool_call_id:
-                            /** @type {any} */ (call).id,
-                        content:
-                            JSON.stringify(result)
+                        tool_call_id: toolCallId,
+                        content: JSON.stringify(result)
                     });
 
                     messages.push({
@@ -966,14 +908,15 @@ async function askAIBackend(prompt, onChunk) {
                         content: `
                         The command has already been executed.
 
-                        Do NOT run additional commands.
-
-                        Do NOT investigate further.
-
-                        Analyze the command output and answer the user.
+                        IMPORTANT:
+                        - Do NOT execute the command again.
+                        - Do NOT run alternative commands.
+                        - Do NOT investigate further.
+                        - Use ONLY the command output provided.
+                        - Explain the result if needed.
+                        - If the user requested terminal output, show the output.
                         `
                     });
-                    toolCalls = [];
                     break;
                 }
 
@@ -988,8 +931,16 @@ async function askAIBackend(prompt, onChunk) {
                     }
 
                     executedTool = true;
-                    const requestedPath =args.path || "";
-                    let matchedPath =matchedFiles.find(file =>file.toLowerCase().endsWith(requestedPath.toLowerCase()));
+                    const requestedPath =String(args.path || "").replace(/\\\\/g, "\\");
+                    let matchedPath = matchedFiles.find(file =>file.toLowerCase() ===requestedPath.toLowerCase());
+
+                    if (!matchedPath) {
+                        matchedPath = matchedFiles.find(file =>
+                            file.toLowerCase().endsWith(
+                                path.basename(requestedPath).toLowerCase()
+                            )
+                        );
+                    }
 
                     if (!matchedPath) {
                         const semanticMatch =semanticResults.find(result =>
@@ -1007,14 +958,23 @@ async function askAIBackend(prompt, onChunk) {
                         continue;
                     }
 
-                    const fileResult =readFileTool({path: args.path});
-
-                    if (!fileResult?.success) {
+                    const fileResult =readFileTool({path: requestedPath});
+                    if (fileResult?.success) {
+                        args.path = fileResult.path;
+                    }else{
                         console.log("FAILED TO READ FILE");
                         continue;
                     }
 
                     console.log("TOOL RESULT SIZE:",JSON.stringify(messages).length);
+
+                    const alreadyModified =messages.some(m =>
+                        m.role === "tool" && String(m.content).includes("File modification completed successfully.")
+                    );
+
+                    if (alreadyModified) {
+                        continue;
+                    }
 
                     const rewriteResponse = await ollama.chat({
                     
@@ -1104,11 +1064,14 @@ async function askAIBackend(prompt, onChunk) {
                     await sleep(500);
                     lastModification = {file: args.path,timestamp: Date.now(),request: prompt};
                     console.log("RESULT:",result);
+                    
+                    const toolCallId =
+                    /** @type {any} */ (call).id ||
+                    `tool_${Date.now()}`;
 
                     messages.push({
                         role: "tool",
-                        tool_call_id:
-                            /** @type {any} */ (call).id,
+                        tool_call_id:toolCallId,
                         content:
                             "File modification completed successfully."
                     });
