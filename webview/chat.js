@@ -68,6 +68,7 @@ document.addEventListener( "DOMContentLoaded", () => {
          * @param {string} chunk
          */
         function streamAIChunk(chunk) {
+            
             if (!messages) {
                 return;
             }

@@ -23,17 +23,18 @@ function setupChatHandler( webviewView) {
                          * @param {string} chunk
                          */
                         chunk => {
-                            AIResponse += chunk;
                             webviewView.webview.postMessage({
-                                command:
-                                    "streamChunk",
-                                text:
-                                    chunk
+                                command: "streamChunk",
+                                text: chunk
                             });
+
+                            if (!chunk.startsWith("__STATUS__")) {
+                                AIResponse += chunk;
+                            }
                         }
                     );
 
-                    appendMessage({role: "assistant",content: AIResponse});
+                    appendMessage({role: "assistant",content: AIResponse.replace(/__STATUS__.*?(?=__STATUS__|$)/gs,"")});
                     webviewView.webview.postMessage({
                         command:
                             "streamEnd"
