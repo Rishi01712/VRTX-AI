@@ -3,9 +3,10 @@
 const ollamaModule = require("ollama");
 const ollama = new ollamaModule.Ollama({host: "http://127.0.0.1:11434"});
 const {findRelevantFiles,readFileTool,getWorkspaceTree} = require("./fileService");
+const {searchAndReplace}=require("./searchAndReplace");
 const {loadChatHistory} = require("./memoryService");
 const {buildMultiFileContext} = require("./MultipleFileService");
-const {modifyFileTool} = require("./editService");
+// const {modifyFileTool} = require("./editService");
 const {semanticSearch,rerankResults} = require("../semantic/semanticSearchService");
 const {buildSemanticContext} = require("../semantic/chunkService");
 const {runCommand} = require("./terminalService");
@@ -34,16 +35,16 @@ const path = require("path");
  * }} SemanticResult
  */
 
-/**
- * @param {string} text
- */
-function sanitizeGeneratedCode(text) {
-    return text
-        .replace(/```[a-zA-Z]*/g, "")
-        .replace(/```/g, "")
-        .replace(/^\d+:\s?/gm, "")
-        .trim();
-}
+// /**
+//  * @param {string} text
+//  */
+// function sanitizeGeneratedCode(text) {
+//     return text
+//         .replace(/```[a-zA-Z]*/g, "")
+//         .replace(/```/g, "")
+//         .replace(/^\d+:\s?/gm, "")
+//         .trim();
+// }
 
 /**
  * @param {string} prompt
@@ -180,13 +181,17 @@ async function askAIBackend(prompt, onChunk) {
             - Use file content, symbols, imports and snippets.
             - Never answer "none of the files" unless semantic results clearly support that conclusion.
 
-            When modifying files:
-            - ALWAYS return complete updated file content.
-            - NEVER return partial patches.
-            - NEVER omit unrelated code.
-            - ALWAYS call modify_file.
-            - NEVER explain edits without tool calls.
-            - NEVER return manual instructions instead of tool usage.
+            For code modifications:
+
+            Prefer search_and_replace
+            instead of rewriting
+            entire files.
+
+            Use read_file first if
+            you need context.
+
+            Only use search_and_replace
+            for localized changes.
 
             Output Analysis Rules:
             - If the user asks for:
@@ -202,7 +207,7 @@ async function askAIBackend(prompt, onChunk) {
             2. Analyze the code.
             3. Return only the output.
 
-            NEVER call modify_file.
+            NEVER call search_and_replace.
             NEVER rewrite files.
             NEVER edit files.
 
@@ -343,6 +348,26 @@ async function askAIBackend(prompt, onChunk) {
             User: list files
             Correct:
             dir
+
+            For search_and_replace:
+
+            NEVER replace single letters.
+
+            NEVER replace variable names globally.
+
+            The search string must contain at least
+            one full line of code or a unique code block.
+
+            Avoid replacing identifiers like:
+            i
+            j
+            k
+            x
+            y
+            z
+
+            unless the exact surrounding code
+            is included.
             `;
 
         const history = isFollowUp(prompt)? loadChatHistory().slice(-6): [];
@@ -369,14 +394,14 @@ async function askAIBackend(prompt, onChunk) {
             
         }
 
-        const useAutomaticSemantic = shouldSearchFiles(prompt);
+        // const useAutomaticSemantic = shouldSearchFiles(prompt);
         /** @type {SemanticResult[]} */
-        let semanticResults = [];
+        // let semanticResults = [];
         try {
-            if (useAutomaticSemantic) {
-                semanticResults =await semanticSearch(prompt,8);
-                semanticResults =rerankResults(semanticResults).slice(0,5);
-            }
+            // if (useAutomaticSemantic) {
+            //     semanticResults =await semanticSearch(prompt,8);
+            //     semanticResults =rerankResults(semanticResults).slice(0,5);
+            // }
 
             // semanticResults =await semanticSearch(prompt,8);
             // const topScore =semanticResults[0]?.score || 0;
@@ -582,32 +607,54 @@ async function askAIBackend(prompt, onChunk) {
                             }
                         },
 
+                        // {
+                        //     type: "function",
+
+                        //     function: {
+                        //         name: "modify_file",
+                        //         description:
+                        //             `
+                        //             Rewrite an entire file with updated content.
+
+                        //             IMPORTANT:
+                        //             - ALWAYS return the FULL updated file content.
+                        //             - NEVER return partial snippets.
+                        //             - Preserve unrelated code exactly.
+                        //             - Only modify requested parts.
+                        //             - Maintain formatting and indentation.
+                        //         `,
+                        //         parameters: {
+                        //             type: "object",
+                        //             properties: {
+                        //                 path: {
+                        //                     type: "string",
+                        //                     description:
+                        //                         "Filename only. Example: merge.py"
+                        //                 }
+                        //             },
+                        //             required: ["path"]
+                        //         }
+                        //     }
+                        // },
+
                         {
                             type: "function",
-
                             function: {
-                                name: "modify_file",
+                                name: "search_and_replace",
                                 description:
-                                    `
-                                    Rewrite an entire file with updated content.
-
-                                    IMPORTANT:
-                                    - ALWAYS return the FULL updated file content.
-                                    - NEVER return partial snippets.
-                                    - Preserve unrelated code exactly.
-                                    - Only modify requested parts.
-                                    - Maintain formatting and indentation.
-                                `,
+                                    "Find and replace exact code, variables, functions, classes or blocks inside a file.",
                                 parameters: {
                                     type: "object",
                                     properties: {
-                                        path: {
+                                        path: { type: "string" },
+                                        search: { type: "string" },
+                                        replace: { type: "string" },
+                                        occurrence: {
                                             type: "string",
-                                            description:
-                                                "Filename only. Example: merge.py"
+                                            enum: ["first", "all"]
                                         }
                                     },
-                                    required: ["path"]
+                                    required: ["path","search","replace"]
                                 }
                             }
                         },
@@ -765,7 +812,7 @@ async function askAIBackend(prompt, onChunk) {
                     args.command = args.command.replace(/^cd\s+\/workspace\s+&&\s*/i, "").replace(/^cd\s+\/home\s+&&\s*/i, "").replace(/^cd\s+.*?&&\s*/i, "");
                 }
 
-                if ((toolName === "read_file" || toolName === "modify_file") && args.query && !args.path) {
+                if ((toolName === "read_file" || toolName === "search_and_replace") && args.query && !args.path) {
                     args.path = args.query;
                 }
 
@@ -789,8 +836,7 @@ async function askAIBackend(prompt, onChunk) {
                 //     break;
                 // }
 
-                const wantsOutput =/\b(output|outputs|print|result|execution)\b/i.test(prompt);
-                if (wantsOutput &&toolName === "modify_file") {
+                if (wantsOutput &&toolName === "search_and_replace") {
                     console.log("BLOCKED MODIFY_FILE FOR OUTPUT REQUEST");
                     continue;
                 }
@@ -920,178 +966,235 @@ async function askAIBackend(prompt, onChunk) {
                     break;
                 }
 
-                else if (toolName === "modify_file") {
-                    const fileWasRead =messages.some(m =>
-                        m.role === "tool" && String(m.content).includes('"content"')
-                    );
-                    
-                    if (!fileWasRead) {
-                        console.log("BLOCKED MODIFY_FILE WITHOUT READ_FILE");
+                else if (toolName ==="search_and_replace") {
+
+                    executedTool = true;
+                     const toolCallId =
+                    /** @type {any} */ (call).id ||
+                    `tool_${Date.now()}`;
+                    if (!args.path ||!args.search ||!args.replace) {
+                        messages.push({
+                            role: "tool",
+                            tool_call_id: toolCallId,
+                            content: JSON.stringify({
+                                success: false,
+                                error:
+                                "path, search and replace are required"
+                            })
+                        });
                         continue;
                     }
 
-                    executedTool = true;
                     const requestedPath =String(args.path || "").replace(/\\\\/g, "\\");
-                    let matchedPath = matchedFiles.find(file =>file.toLowerCase() ===requestedPath.toLowerCase());
 
+                    let matchedPath =matchedFiles.find(file =>file.toLowerCase() ===requestedPath.toLowerCase());
                     if (!matchedPath) {
                         matchedPath = matchedFiles.find(file =>
-                            file.toLowerCase().endsWith(
-                                path.basename(requestedPath).toLowerCase()
-                            )
+                            file.toLowerCase().endsWith(path.basename(requestedPath).toLowerCase())
                         );
                     }
 
                     if (!matchedPath) {
-                        const semanticMatch =semanticResults.find(result =>
-                                    result.path.toLowerCase().endsWith(
-                                        requestedPath.toLowerCase()
-                                    )
-                        );
-                        matchedPath =semanticMatch?.path;
-                    }
-                    
-                    if (matchedPath) {
-                        args.path =matchedPath;
-                    }else{
                         console.log("NO MATCHED FILE PATH FOUND");
                         continue;
                     }
+                    args.path = matchedPath;
 
-                    const fileResult =readFileTool({path: requestedPath});
-                    if (fileResult?.success) {
-                        args.path = fileResult.path;
-                    }else{
-                        console.log("FAILED TO READ FILE");
-                        continue;
-                    }
-
-                    console.log("TOOL RESULT SIZE:",JSON.stringify(messages).length);
-
-                    const alreadyModified =messages.some(m =>
-                        m.role === "tool" && String(m.content).includes("File modification completed successfully.")
-                    );
-
-                    if (alreadyModified) {
-                        continue;
-                    }
-
-                    const rewriteResponse = await ollama.chat({
-                    
-                            model:
-                                "qwen2.5-coder:latest",
-                            messages: [
-                                {
-                                    role: "system",
-                                    content:
-                                        `
-                                        You are an expert code editor.
-
-                                        Current file:
-                                        ${args.path}
-                                        
-                                        Rewrite the ENTIRE file safely.
-
-                                        Requirements:
-                                        - Return the ENTIRE file.
-                                        - Modify ONLY requested parts.
-                                        - Never omit lines.
-                                        - Never summarize.
-                                        - Never explain.
-                                        - Never use markdown.
-                                        - Preserve unrelated code exactly.
-                                        - Output must be valid source code only.
-
-                                        You MUST return the COMPLETE updated file.
-                                        `
-                                },
-
-                                {
-                                    role: "user",
-                                    content:
-                                        `
-                                        USER REQUEST:
-                                        ${prompt}
-
-                                        FILE PATH:
-                                        ${args.path}
-
-                                        ORIGINAL FILE:
-                                        ${fileResult.content}
-                                        `
-                                }
-                            ],
-
-                            stream: false,
-                            options: {
-                                temperature: 0,
-                                top_p: 0.8,
-                                num_ctx: 32768
-                            }
-                        });
-                    
-                    if (!rewriteResponse?.message?.content) {
-                        console.log("NO REWRITE CONTENT GENERATED");
-                        continue;
-                    }
-
-                    args.content =sanitizeGeneratedCode(rewriteResponse.message.content || "");
-                    const allowsLargeDeletion =/remove|delete|replace whole|rewrite entire/i.test(prompt);
-                    const originalLines =(fileResult.content || "").split("\n").length;
-                    const newLines =args.content.split("\n").length;
-
-                    if (!allowsLargeDeletion &&newLines <originalLines * 0.4) {
-                        console.log("POSSIBLE TRUNCATED REWRITE");
-                        continue;
-                    }
-
-                    console.log("GENERATED CONTENT PREVIEW:");
-                    console.log(args.content.slice(0, 500));
-
-                    if (!args.content.trim()) {
-                        console.log("EMPTY GENERATED CONTENT");
-                        continue;
-                    }
-
-                    console.log("WRITING FILE:",args.path);
-                    const fileName =path.basename(args.path || "");
-                    sendToolStatus(`Writing ${fileName}`);
-                    await sleep(500);
-                    console.log("CONTENT LENGTH:",args.content.length);
-
-                    const result = modifyFileTool(args);
-                    sendToolStatus(`Saved ${fileName}`);
-                    await sleep(500);
-                    lastModification = {file: args.path,timestamp: Date.now(),request: prompt};
-                    console.log("RESULT:",result);
-                    
-                    const toolCallId =
-                    /** @type {any} */ (call).id ||
-                    `tool_${Date.now()}`;
+                    const result = await searchAndReplace(args.path,args.search,args.replace,args.occurrence || "first");
+                    console.log("SEARCH_AND_REPLACE RESULT:",result);
 
                     messages.push({
                         role: "tool",
                         tool_call_id:toolCallId,
                         content:
-                            "File modification completed successfully."
+                            JSON.stringify(result)
                     });
 
                     messages.push({
                         role: "system",
-                        content:
-                            `
-                            The file modification was completed successfully.
+                        content: `
+                        The replacement has already been applied.
 
-                            IMPORTANT:
-                            - The edit request has already been completed.
-                            - Do NOT call modify_file again.
-                            - Respond naturally to the user.
+                        Do NOT call search_and_replace again.
 
-                            Do NOT output raw JSON.
-                            Do NOT generate another tool call.
-                            `
+                        Explain what was changed.
+                        `
                     });
+
                 }
+
+                // else if (toolName === "modify_file") {
+                //     const fileWasRead =messages.some(m =>
+                //         m.role === "tool" && String(m.content).includes('"content"')
+                //     );
+                    
+                //     if (!fileWasRead) {
+                //         console.log("BLOCKED MODIFY_FILE WITHOUT READ_FILE");
+                //         continue;
+                //     }
+
+                //     executedTool = true;
+                //     const requestedPath =String(args.path || "").replace(/\\\\/g, "\\");
+                //     let matchedPath = matchedFiles.find(file =>file.toLowerCase() ===requestedPath.toLowerCase());
+
+                //     if (!matchedPath) {
+                //         matchedPath = matchedFiles.find(file =>
+                //             file.toLowerCase().endsWith(
+                //                 path.basename(requestedPath).toLowerCase()
+                //             )
+                //         );
+                //     }
+
+                //     if (!matchedPath) {
+                //         const semanticMatch =semanticResults.find(result =>
+                //                     result.path.toLowerCase().endsWith(
+                //                         requestedPath.toLowerCase()
+                //                     )
+                //         );
+                //         matchedPath =semanticMatch?.path;
+                //     }
+                    
+                //     if (matchedPath) {
+                //         args.path =matchedPath;
+                //     }else{
+                //         console.log("NO MATCHED FILE PATH FOUND");
+                //         continue;
+                //     }
+
+                //     const fileResult =readFileTool({path: requestedPath});
+                //     if (fileResult?.success) {
+                //         args.path = fileResult.path;
+                //     }else{
+                //         console.log("FAILED TO READ FILE");
+                //         continue;
+                //     }
+
+                //     console.log("TOOL RESULT SIZE:",JSON.stringify(messages).length);
+
+                //     const alreadyModified =messages.some(m =>
+                //         m.role === "tool" && String(m.content).includes("File modification completed successfully.")
+                //     );
+
+                //     if (alreadyModified) {
+                //         continue;
+                //     }
+
+                //     const rewriteResponse = await ollama.chat({
+                    
+                //             model:
+                //                 "qwen2.5-coder:latest",
+                //             messages: [
+                //                 {
+                //                     role: "system",
+                //                     content:
+                //                         `
+                //                         You are an expert code editor.
+
+                //                         Current file:
+                //                         ${args.path}
+                                        
+                //                         Rewrite the ENTIRE file safely.
+
+                //                         Requirements:
+                //                         - Return the ENTIRE file.
+                //                         - Modify ONLY requested parts.
+                //                         - Never omit lines.
+                //                         - Never summarize.
+                //                         - Never explain.
+                //                         - Never use markdown.
+                //                         - Preserve unrelated code exactly.
+                //                         - Output must be valid source code only.
+
+                //                         You MUST return the COMPLETE updated file.
+                //                         `
+                //                 },
+
+                //                 {
+                //                     role: "user",
+                //                     content:
+                //                         `
+                //                         USER REQUEST:
+                //                         ${prompt}
+
+                //                         FILE PATH:
+                //                         ${args.path}
+
+                //                         ORIGINAL FILE:
+                //                         ${fileResult.content}
+                //                         `
+                //                 }
+                //             ],
+
+                //             stream: false,
+                //             options: {
+                //                 temperature: 0,
+                //                 top_p: 0.8,
+                //                 num_ctx: 32768
+                //             }
+                //         });
+                    
+                //     if (!rewriteResponse?.message?.content) {
+                //         console.log("NO REWRITE CONTENT GENERATED");
+                //         continue;
+                //     }
+
+                //     args.content =sanitizeGeneratedCode(rewriteResponse.message.content || "");
+                //     const allowsLargeDeletion =/remove|delete|replace whole|rewrite entire/i.test(prompt);
+                //     const originalLines =(fileResult.content || "").split("\n").length;
+                //     const newLines =args.content.split("\n").length;
+
+                //     if (!allowsLargeDeletion &&newLines <originalLines * 0.4) {
+                //         console.log("POSSIBLE TRUNCATED REWRITE");
+                //         continue;
+                //     }
+
+                //     console.log("GENERATED CONTENT PREVIEW:");
+                //     console.log(args.content.slice(0, 500));
+
+                //     if (!args.content.trim()) {
+                //         console.log("EMPTY GENERATED CONTENT");
+                //         continue;
+                //     }
+
+                //     console.log("WRITING FILE:",args.path);
+                //     const fileName =path.basename(args.path || "");
+                //     sendToolStatus(`Writing ${fileName}`);
+                //     await sleep(500);
+                //     console.log("CONTENT LENGTH:",args.content.length);
+
+                //     const result = modifyFileTool(args);
+                //     sendToolStatus(`Saved ${fileName}`);
+                //     await sleep(500);
+                //     lastModification = {file: args.path,timestamp: Date.now(),request: prompt};
+                //     console.log("RESULT:",result);
+                    
+                //     const toolCallId =
+                //     /** @type {any} */ (call).id ||
+                //     `tool_${Date.now()}`;
+
+                //     messages.push({
+                //         role: "tool",
+                //         tool_call_id:toolCallId,
+                //         content:
+                //             "File modification completed successfully."
+                //     });
+
+                //     messages.push({
+                //         role: "system",
+                //         content:
+                //             `
+                //             The file modification was completed successfully.
+
+                //             IMPORTANT:
+                //             - The edit request has already been completed.
+                //             - Do NOT call modify_file again.
+                //             - Respond naturally to the user.
+
+                //             Do NOT output raw JSON.
+                //             Do NOT generate another tool call.
+                //             `
+                //     });
+                // }
                 
                 if (!executedTool) {
                     console.log("NO TOOLS EXECUTED, BREAKING LOOP");
