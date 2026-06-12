@@ -4,7 +4,8 @@ const ollamaModule = require("ollama");
 const ollama = new ollamaModule.Ollama({host: "http://127.0.0.1:11434"});
 const {findRelevantFiles,readFileTool,getWorkspaceTree} = require("./fileService");
 const {searchAndReplace}=require("./searchAndReplace");
-const {loadChatHistory} = require("./memoryService");
+// const {loadChatHistory} = require("./memoryService");
+const {getThread,loadThread}=require("./threadService")
 const {buildMultiFileContext} = require("./MultipleFileService");
 // const {modifyFileTool} = require("./editService");
 const {semanticSearch,rerankResults} = require("../semantic/semanticSearchService");
@@ -46,12 +47,12 @@ const path = require("path");
 //         .trim();
 // }
 
-/**
- * @param {string} prompt
- */
-function isFollowUp(prompt) {
-    return /\b(it|this|that|same|previous|above|earlier)\b/i.test(prompt);
-}
+// /**
+//  * @param {string} prompt
+//  */
+// function isFollowUp(prompt) {
+//     return /\b(it|this|that|same|previous|above|earlier)\b/i.test(prompt);
+// }
 
 /**
  * @param {string} prompt
@@ -370,7 +371,13 @@ async function askAIBackend(prompt, onChunk) {
             is included.
             `;
 
-        const history = isFollowUp(prompt)? loadChatHistory().slice(-6): [];
+        const threadId = getThread();
+        let history = [];
+        
+        if (threadId) {
+            const thread = await loadThread(threadId);
+            history =thread.messages.slice(-20);
+        }
 
         /** @type {string[]} */
         let matchedFiles = [];

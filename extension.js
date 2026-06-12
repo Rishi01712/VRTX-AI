@@ -5,6 +5,7 @@ const path = require("path");
 const {setupChatHandler} = require("./providers/chatProvider");
 const { indexWorkspaceFiles } = require("./services/fileService");
 const {buildSemanticIndex} = require("./semantic/embeddingService");
+const {createThread,setThread,getAllThreads} = require("./services/threadService");
 
 /**
  * @param {vscode.Webview} webview
@@ -43,6 +44,16 @@ function getWebviewContent( webview, context ) {
 async function activate(context) {
     console.log("EXTENSION ACTIVATED");
 
+    const threads = await getAllThreads();
+
+    if (threads.length === 0) {
+        const id =await createThread("New Chat");
+        setThread(id);
+    }
+    else {
+        setThread(threads[0].id);
+    }
+
     await indexWorkspaceFiles();
     console.log("Workspace indexed");
 
@@ -67,6 +78,12 @@ async function activate(context) {
                     context
                 );
             setupChatHandler(webviewView);
+            
+            setTimeout(async () => {
+                const threads = await getAllThreads();
+                webviewView.webview.postMessage({command:"threads",data:threads});
+            },500);
+            
         }
     };
     context.subscriptions.push(

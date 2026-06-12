@@ -155,3 +155,75 @@ pre code {
     border: 1px solid #2d323c;
     box-sizing: border-box;
 }
+
+#newChatBtn{
+    color:white;
+    background-color:rgb(46, 76, 105);
+}
+#sidebar {
+    position: fixed;
+    top: 0;
+    left: -250px;
+    width: 220px;
+    height: 100%;
+    background: #1e1e1e;
+    border-right: 1px solid #333;
+    transition: left 0.25s ease;
+    z-index: 1000;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+}
+
+#sidebar.open {
+    left: 0;
+}
+
+#sidebarToggle {
+    position: fixed;
+    top: 8px;
+    left: 8px;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    background: transparent;
+    color: #cfcfcf;
+    border-radius: 8px;
+    cursor: pointer;
+    z-index: 1001;
+}
+
+#sidebarToggle:hover {
+    background: #2a2a2a;
+}
+
+#sidebarHeader {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 12px;
+}
+
+#chatList {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 4px;
+}
+
+.threadItem {
+    padding: 10px;
+    border-radius: 8px;
+    background: #252526;
+    cursor: pointer;
+}
+
+.threadItem:hover {
+    background: #333;
+}

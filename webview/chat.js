@@ -6,8 +6,13 @@ document.addEventListener( "DOMContentLoaded", () => {
         const messages = document.getElementById( "messages" );
         const input = document.getElementById( "input" );
         const sendBtn = document.getElementById("sendBtn");
+        const chatList = document.getElementById("chatList");
+        const newChatBtn = document.getElementById("newChatBtn");
+        const sidebar = document.getElementById("sidebar");
+        const sidebarToggle = document.getElementById("sidebarToggle");
 
         let currentAIMessage = null;
+        let currentThreadId = null;
         let currentMarkdown = "";
         let currentStatus = "";
         let isGenerating = false;
@@ -53,7 +58,8 @@ document.addEventListener( "DOMContentLoaded", () => {
             }
              
             const div = document.createElement( "div" );
-            div.className = "message " + type;
+            const cssType = type === "assistant"? "ai": type;
+            div.className ="message " + cssType;
             div.innerHTML = marked.parse( String(text ?? ""));
             messages.appendChild( div );
 
@@ -61,6 +67,24 @@ document.addEventListener( "DOMContentLoaded", () => {
             const isNearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120;
             if(isNearBottom) {
                 messages.scrollTop = messages.scrollHeight;
+            }
+        }
+
+        function renderThreads(threads) {
+            chatList.innerHTML = "";
+
+            for (const thread of threads) {
+                const item = document.createElement("div");
+                item.className = "threadItem";
+                item.innerText = thread.title;
+
+                item.onclick = () => {
+                    currentThreadId = thread.id;
+                    vscode.postMessage({command: "loadThread",threadId: thread.id});
+                    sidebar.classList.remove("open");
+                };
+
+                chatList.appendChild(item);
             }
         }
 
@@ -171,6 +195,17 @@ document.addEventListener( "DOMContentLoaded", () => {
             sendBtn.addEventListener("click", () => {sendMessage();});
         }
 
+        if(newChatBtn){
+            newChatBtn?.addEventListener("click",() => {
+                vscode.postMessage({command:"newThread"});
+            });
+        }
+
+        if (sidebarToggle) {
+            sidebarToggle.addEventListener("click",() => {
+                sidebar.classList.toggle("open");
+            });
+        }
 
         window.addEventListener( "message", event => {
                 const message =  event.data;
@@ -190,6 +225,29 @@ document.addEventListener( "DOMContentLoaded", () => {
                         currentMarkdown = "";
                         setGeneratingState(false);
                         break;
+                    
+                    case "threads":
+                        message.data.sort((a, b) =>
+                            new Date(b.updatedAt) - new Date(a.updatedAt)
+                        );
+                        renderThreads(message.data);
+                        break;
+                                        
+                    case "threadData":
+                        messages.innerHTML = "";
+                        currentThreadId =message.data.id;
+                        sidebar.classList.remove("open");
+
+                        for (const msg of message.data.messages) {
+                            addMessage(msg.content,msg.role);
+                        }
+
+                        break;
+                    
+                    case "threadCreated":
+                        currentThreadId = message.threadId;
+                        vscode.postMessage({command: "loadThread",threadId: message.threadId});
+                        break;
 
                     case "error":
                         addMessage(String(message.text ?? ""),
@@ -199,5 +257,6 @@ document.addEventListener( "DOMContentLoaded", () => {
                 }
             }
         );
+        vscode.postMessage({command:"getThreads"});
     }
 );
